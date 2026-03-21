@@ -37,15 +37,30 @@ import select
 
 _touch_fd = None
 
+_touch_fd   = None
+_last_tap   = 0
+TAP_COOLDOWN = 1.2  # seconds — increase if still too sensitive
+
 def _check_tap():
-    global _touch_fd
+    global _touch_fd, _last_tap
     try:
         if _touch_fd is None:
             _touch_fd = open("/dev/input/event0", "rb")
+
         r, _, _ = select.select([_touch_fd], [], [], 0)
         if r:
-            _touch_fd.read(16)  # consume the event
-            return True
+            # drain ALL pending events so drag doesn't fire multiple times
+            while True:
+                r2, _, _ = select.select([_touch_fd], [], [], 0)
+                if not r2:
+                    break
+                _touch_fd.read(16)
+
+            # only register if cooldown has passed
+            now = time.time()
+            if now - _last_tap > TAP_COOLDOWN:
+                _last_tap = now
+                return True
     except:
         _touch_fd = None
     return False
@@ -53,9 +68,7 @@ def _check_tap():
 # ── main loop ─────────────────────────────────────────────────
 
 def run():
-    current    = 0
-    last_tap   = 0
-    TAP_COOLDOWN = 0.5  # seconds between taps
+    current = 0
 
     print("BearBox idle started — tap screen to cycle")
 
@@ -65,11 +78,8 @@ def run():
 
         # check for tap
         if _check_tap():
-            now = time.time()
-            if now - last_tap > TAP_COOLDOWN:
-                current  = (current + 1) % len(SCREENS)
-                last_tap = now
-                print(f"Switched to screen {current}")
+            current = (current + 1) % len(SCREENS)
+            print(f"Switched to screen {current}")
 
         time.sleep(1/30)
 
