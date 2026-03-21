@@ -1,91 +1,48 @@
 #!/usr/bin/env python3
 """
-BearBox Idle — StandBy Clock (horizontal 480x320)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-To move things around, only edit the LAYOUT and
-SIZES blocks below — don't touch anything else!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BearBox Idle — StandBy Clock
+Pillow + direct framebuffer (no pygame/SDL needed)
+480x320 landscape
 """
 
-import pygame
 import time
 import subprocess
 import threading
 import os
 import random
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from display import (
+    new_frame, push, draw_text_centered, draw_bar,
+    draw_scanlines, wrap_text, font, C, W, H
+)
 
 # ╔══════════════════════════════════════════════╗
 # ║              EDIT THIS BLOCK                 ║
 # ╚══════════════════════════════════════════════╝
 
-# ── Font sizes ────────────────────────────────
-CLOCK_SIZE  = 145  # HH:MM:SS
-DATE_SIZE   = 20    # date text
-QUOTE_SIZE  = 15    # quote text
-LABEL_SIZE  = 11    # "CPU" / "RAM" labels
-STAT_SIZE   = 13    # "0.0%" values
+CLOCK_SIZE       = 120    # HH:MM:SS font size
+DATE_SIZE        = 20     # date text size
+QUOTE_SIZE       = 15     # quote text size
+LABEL_SIZE       = 11     # CPU/RAM label size
+STAT_SIZE        = 13     # CPU/RAM value size
 
-# ── Clock position ────────────────────────────
-CLOCK_ZONE  = 0.65  # 0.0–1.0 — how much of screen height the clock owns
-                    # bigger = clock moves down and has more room
+CLOCK_ZONE       = 0.65   # 0.0-1.0, how much screen height clock owns
+SEP_GAP          = 4      # gap between clock zone and separator
+DATE_GAP         = 8      # gap between separator and date
+QUOTE_GAP        = 26     # gap between date and quote
+QUOTE_LINE       = 18     # line height between quote lines
 
-# ── Bottom info section ───────────────────────
-SEP_GAP     = -50     # gap between clock zone and separator line
-DATE_GAP    = 8     # gap between separator line and date
-QUOTE_GAP   = 26    # gap between date and quote
-QUOTE_LINE  = 18    # line height between quote lines
+STAT_FROM_BOTTOM = 28     # distance of stats from bottom
+STAT_BAR_WIDTH   = 110    # width of CPU/RAM bars
 
-# ── Stats bars (bottom corners) ───────────────
-STAT_FROM_BOTTOM = 28   # distance from bottom of screen
-STAT_BAR_WIDTH   = 110  # width of CPU/RAM bars
-
-# ── Quote timing ──────────────────────────────
-TYPE_SPEED  = 0.045  # seconds per character (lower = faster typing)
-QUOTE_HOLD  = 10.0   # seconds before next quote appears
+TYPE_SPEED       = 0.045  # seconds per character
+QUOTE_HOLD       = 10.0   # seconds before next quote
 
 # ╔══════════════════════════════════════════════╗
 # ║           DON'T EDIT BELOW HERE              ║
 # ╚══════════════════════════════════════════════╝
-
-C = {
-    "bg":       (0,    5,   15),
-    "blue":     (0,   180, 255),
-    "midblue":  (0,   120, 200),
-    "dimblue":  (0,    40,  80),
-    "white":    (240, 248, 255),
-    "dimwhite": (100, 120, 145),
-    "green":    (0,   255, 80),
-    "dim":      (15,  30,  50),
-    "amber":    (255, 176,  0),
-    "red":      (255,  50,  50),
-}
-
-def _font(size, bold=False):
-    # try custom font first
-    font_path = os.path.join(os.path.dirname(__file__), "../../fonts/mycustomfont.ttf")
-    if os.path.exists(font_path):
-        return pygame.font.Font(font_path, size)
-    # fallback to system fonts
-    for name in ["DejaVu Sans Mono", "Courier New", "Courier"]:
-        try:
-            return pygame.font.SysFont(name, size, bold=bold)
-        except:
-            pass
-    return pygame.font.Font(None, size)
-
-F_CLOCK = None
-F_DATE  = None
-F_QUOTE = None
-F_LABEL = None
-F_STAT  = None
-
-def _init_fonts():
-    global F_CLOCK, F_DATE, F_QUOTE, F_LABEL, F_STAT
-    F_CLOCK = _font(CLOCK_SIZE, bold=True)
-    F_DATE  = _font(DATE_SIZE,  bold=True)
-    F_QUOTE = _font(QUOTE_SIZE)
-    F_LABEL = _font(LABEL_SIZE)
-    F_STAT  = _font(STAT_SIZE,  bold=True)
 
 # ── STATS ─────────────────────────────────────────────────────
 _stats = {"cpu": 0.0, "ram": 0.0, "ram_used": 0, "ram_total": 0}
@@ -163,98 +120,87 @@ def _update_quotes():
             _quote_timer   = now
             _type_timer    = now
 
-# ── HELPERS ───────────────────────────────────────────────────
-def _centered(surf, text, font, color, y):
-    s = font.render(text, True, color)
-    surf.blit(s, ((surf.get_width() - s.get_width()) // 2, y))
-    return s.get_height()
+# ── FONTS ─────────────────────────────────────────────────────
+# pre-load so first frame isn't slow
+_F = {}
 
-def _draw_bar(surf, x, y, w, h, pct, color):
-    pygame.draw.rect(surf, C["dim"], (x, y, w, h), border_radius=2)
-    filled = int(w * min(pct / 100, 1.0))
-    if filled > 0:
-        pygame.draw.rect(surf, color, (x, y, filled, h), border_radius=2)
-    pygame.draw.rect(surf, C["dimblue"], (x, y, w, h), 1, border_radius=2)
+def _fonts():
+    if not _F:
+        _F["clock"] = font(CLOCK_SIZE, bold=True)
+        _F["date"]  = font(DATE_SIZE,  bold=True)
+        _F["quote"] = font(QUOTE_SIZE)
+        _F["label"] = font(LABEL_SIZE)
+        _F["stat"]  = font(STAT_SIZE,  bold=True)
+    return _F
 
-def _draw_scanlines(surf):
-    W, H = surf.get_width(), surf.get_height()
-    for y in range(0, H, 4):
-        pygame.draw.line(surf, (0, 3, 12), (0, y), (W, y))
+# ── DRAW ──────────────────────────────────────────────────────
+_tick = 0
 
-def _wrap_text(text, font, max_w):
-    words = text.split()
-    lines, line = [], ""
-    for word in words:
-        test = (line + " " + word).strip()
-        if font.size(test)[0] <= max_w:
-            line = test
-        else:
-            if line:
-                lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    return lines
-
-# ── MAIN DRAW ─────────────────────────────────────────────────
-_tick    = 0
-_colon_w = None
-
-def draw(surf):
-    global _tick, _colon_w
-    if F_CLOCK is None:
-        _init_fonts()
-
+def draw():
+    global _tick
     _tick += 1
     _update_quotes()
 
-    W, H = surf.get_width(), surf.get_height()
-    surf.fill(C["bg"])
-    _draw_scanlines(surf)
+    F   = _fonts()
+    now = time.localtime()
+    sec = now.tm_sec
 
-    now  = time.localtime()
-    secs = now.tm_sec
+    img, d = new_frame()
+    draw_scanlines(d)
 
     # ── Clock ─────────────────────────────────────────────────
-    h_s  = F_CLOCK.render(time.strftime("%H"), True, C["white"])
-    c1_s = F_CLOCK.render(":",                 True, C["white"])   # HH:MM — never blinks
-    m_s  = F_CLOCK.render(time.strftime("%M"), True, C["white"])
-    c2_s = F_CLOCK.render(":",                 True,              # MM:SS — BLINKS
-                           C["blue"] if secs % 2 == 0 else C["dimblue"])
-    sc_s = F_CLOCK.render(f"{secs:02d}",       True, C["blue"])
+    h_str  = time.strftime("%H")
+    m_str  = time.strftime("%M")
+    s_str  = f"{sec:02d}"
+    # always solid HH:MM colon, only MM:SS colon blinks
+    full   = f"{h_str}:{m_str}:{s_str}"
 
-    total_w    = sum(s.get_width() for s in [h_s, c1_s, m_s, c2_s, sc_s])
-    clock_h    = h_s.get_height()
+    # measure each part for centering
+    def tw(txt, f): return f.getbbox(txt)[2] - f.getbbox(txt)[0]
+    def th(txt, f): return f.getbbox(txt)[3] - f.getbbox(txt)[1]
+
+    parts = [
+        (h_str,  C["white"]),
+        (":",    C["white"]),        # HH:MM — always solid
+        (m_str,  C["white"]),
+        (":",    C["blue"] if sec % 2 == 0 else C["dimblue"]),  # blinks
+        (s_str,  C["blue"]),
+    ]
+
+    total_w    = sum(tw(p[0], F["clock"]) for p in parts)
+    clock_h    = th("0", F["clock"])
     clock_zone = int(H * CLOCK_ZONE)
     clock_y    = (clock_zone - clock_h) // 2
-    clock_x    = (W - total_w) // 2
+    x          = (W - total_w) // 2
 
-    x = clock_x
-    for s in [h_s, c1_s, m_s, c2_s, sc_s]:
-        surf.blit(s, (x, clock_y))
-        x += s.get_width()
+    for text, color in parts:
+        d.text((x, clock_y), text, font=F["clock"], fill=color)
+        x += tw(text, F["clock"])
 
     # ── Separator ─────────────────────────────────────────────
     sep_y = clock_zone + SEP_GAP
-    pygame.draw.line(surf, C["dimblue"], (20, sep_y), (W-20, sep_y), 1)
+    d.line([(20, sep_y), (W-20, sep_y)], fill=C["dimblue"], width=1)
 
     # ── Date ─────────────────────────────────────────────────
-    date_y = sep_y + DATE_GAP
-    _centered(surf, time.strftime("%A  %d %B %Y").upper(), F_DATE, C["white"], date_y)
+    date_y   = sep_y + DATE_GAP
+    date_str = time.strftime("%A  %d %B %Y").upper()
+    draw_text_centered(d, date_str, F["date"], C["white"], date_y)
 
     # ── Quote ─────────────────────────────────────────────────
-    quote_y = date_y + F_DATE.get_height() + QUOTE_GAP - F_DATE.get_height()
+    quote_y = date_y + DATE_SIZE + QUOTE_GAP - DATE_SIZE
     if _quote_display:
-        lines = _wrap_text(f'"{_quote_display}"', F_QUOTE, W - 60)
+        lines = wrap_text(f'"{_quote_display}"', F["quote"], W - 60)
         for i, line in enumerate(lines[:2]):
-            ls = F_QUOTE.render(line, True, C["green"])
-            surf.blit(ls, ((W - ls.get_width()) // 2, quote_y + i * QUOTE_LINE))
+            lw = F["quote"].getbbox(line)[2] - F["quote"].getbbox(line)[0]
+            d.text(((W - lw) // 2, quote_y + i * QUOTE_LINE),
+                   line, font=F["quote"], fill=C["green"])
+        # blinking cursor
         if _tick % 20 < 10:
             last  = lines[min(len(lines)-1, 1)]
-            lw    = F_QUOTE.size(last)[0]
+            lw    = F["quote"].getbbox(last)[2] - F["quote"].getbbox(last)[0]
             cur_x = (W - lw) // 2 + lw + 2
             cur_y = quote_y + min(len(lines)-1, 1) * QUOTE_LINE
-            pygame.draw.rect(surf, C["green"], (cur_x, cur_y + 2, 5, 11))
+            d.rectangle([cur_x, cur_y+2, cur_x+5, cur_y+13], fill=C["green"])
 
     # ── Stats ─────────────────────────────────────────────────
     stat_y  = H - STAT_FROM_BOTTOM
@@ -263,11 +209,23 @@ def draw(surf):
     cpu_col = C["blue"] if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
     ram_col = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
 
-    surf.blit(F_LABEL.render("CPU", True, C["dimwhite"]), (10, stat_y))
-    surf.blit(F_STAT.render(f"{cpu_pct:.1f}%", True, cpu_col), (36, stat_y - 1))
-    _draw_bar(surf, 10, stat_y + 14, STAT_BAR_WIDTH, 5, cpu_pct, cpu_col)
+    # CPU left
+    d.text((10, stat_y),    "CPU", font=F["label"], fill=C["dimwhite"])
+    d.text((36, stat_y-1),  f"{cpu_pct:.1f}%", font=F["stat"], fill=cpu_col)
+    draw_bar(d, 10, stat_y+16, STAT_BAR_WIDTH, 5, cpu_pct, cpu_col)
 
+    # RAM right
     rx = W - STAT_BAR_WIDTH - 10
-    surf.blit(F_LABEL.render("RAM", True, C["dimwhite"]), (rx, stat_y))
-    surf.blit(F_STAT.render(f"{ram_pct:.1f}%", True, ram_col), (rx + 28, stat_y - 1))
-    _draw_bar(surf, rx, stat_y + 14, STAT_BAR_WIDTH, 5, ram_pct, ram_col)
+    d.text((rx,    stat_y),   "RAM", font=F["label"], fill=C["dimwhite"])
+    d.text((rx+28, stat_y-1), f"{ram_pct:.1f}%", font=F["stat"], fill=ram_col)
+    draw_bar(d, rx, stat_y+16, STAT_BAR_WIDTH, 5, ram_pct, ram_col)
+
+    push(img)
+
+
+# ── STANDALONE TEST ───────────────────────────────────────────
+if __name__ == "__main__":
+    print("Running clock — Ctrl+C to stop")
+    while True:
+        draw()
+        time.sleep(1/30)
