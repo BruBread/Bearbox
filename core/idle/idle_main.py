@@ -35,19 +35,20 @@ SCREENS = [
 # ── touch input ───────────────────────────────────────────────
 import select
 
+_touch_fd = None
+
 def _check_tap():
-    """
-    Returns True if screen was tapped.
-    Reads from touchscreen input device.
-    """
-    touch_dev = "/dev/input/touchscreen"
-    if not os.path.exists(touch_dev):
-        return False
+    global _touch_fd
     try:
-        r, _, _ = select.select([open(touch_dev, "rb")], [], [], 0)
-        return bool(r)
+        if _touch_fd is None:
+            _touch_fd = open("/dev/input/event0", "rb")
+        r, _, _ = select.select([_touch_fd], [], [], 0)
+        if r:
+            _touch_fd.read(16)  # consume the event
+            return True
     except:
-        return False
+        _touch_fd = None
+    return False
 
 # ── main loop ─────────────────────────────────────────────────
 
