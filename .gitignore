@@ -10,6 +10,7 @@ __pycache__/
 
 # Test files
 test_screen.py
+test_OS.py
 
 # OS junk
 .DS_Store

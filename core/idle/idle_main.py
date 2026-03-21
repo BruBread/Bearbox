@@ -19,12 +19,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from display import W, H, FB_DEV
 
 # ── import all screens ────────────────────────────────────────
+
 from clock import draw as draw_clock
 from hello import draw as draw_hello
 # from matrix import draw as draw_matrix   ← uncomment when ready
 # from bear import draw as draw_bear       ← uncomment when ready
 
 # ── screen order — add more as you build them ─────────────────
+
+from boot_anim import play as play_boot
+
 SCREENS = [
     draw_clock,
     draw_hello,
@@ -68,6 +72,9 @@ def _check_tap():
 # ── main loop ─────────────────────────────────────────────────
 
 def run():
+    play_boot()   # plays once, guard prevents double play
+    current = 0
+
     current = 0
 
     print("BearBox idle started — tap screen to cycle")
