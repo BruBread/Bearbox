@@ -163,6 +163,13 @@ divider
 spinner $! "Installing hotswap rules..."
 ok "udev rules installed"
 
+# ── Aliases ────────────────────────────────────
+step "Setting up shortcuts..."
+divider
+cat /home/bearbox/bearbox/bashrc_aliases >> /home/bearbox/.bashrc
+source /home/bearbox/.bashrc 2>/dev/null || true
+ok "Shortcuts ready — type bbhelp to see them"
+
 step "Installing BearBox service..."
 divider
 (cp /home/bearbox/bearbox/services/bearbox.service /etc/systemd/system/ && \

@@ -1,0 +1,22 @@
+# ── BearBox Shortcuts ──────────────────────────────────────────
+alias bbhelp='echo "
+╔══════════════════════════════════════════════╗
+║           BearBox — Shortcuts                ║
+╚══════════════════════════════════════════════╝
+
+  bbhelp        →  show this menu
+  bbclock       →  launch clock screen
+  bbinstall     →  run install script
+  bbupdate      →  git pull latest code
+  bbstatus      →  check bearbox service
+  bblogs        →  watch live service logs
+  bbedit        →  cd into bearbox folder
+
+╚══════════════════════════════════════════════╝
+"'
+alias bbclock='sudo python3 ~/bearbox/core/idle/clock.py'
+alias bbinstall='cd ~/bearbox && sudo bash install.sh'
+alias bbupdate='cd ~/bearbox && git pull'
+alias bbstatus='sudo systemctl status bearbox'
+alias bblogs='sudo journalctl -u bearbox -f'
+alias bbedit='cd ~/bearbox'
