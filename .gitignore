@@ -1,0 +1,20 @@
+# PyCharm
+.idea/
+*.iml
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test files
+test_screen.py
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
