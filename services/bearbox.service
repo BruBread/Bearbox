@@ -1,0 +1,14 @@
+[Unit]
+Description=BearBox Idle Screen
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /home/bearbox/bearbox/core/idle/idle_main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
