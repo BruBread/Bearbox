@@ -3,6 +3,12 @@
 BearBox Idle — StandBy Clock
 Pillow + direct framebuffer (no pygame/SDL needed)
 480x320 landscape
+
+Corner overlays:
+  Top Left     — CPU % + temperature
+  Top Right    — RAM %
+  Bottom Left  — Storage used/total
+  Bottom Right — IP address
 """
 
 import time
@@ -22,39 +28,50 @@ from display import (
 # ║              EDIT THIS BLOCK                 ║
 # ╚══════════════════════════════════════════════╝
 
-CLOCK_SIZE       = 120    # HH:MM:SS font size
-DATE_SIZE        = 20     # date text size
-QUOTE_SIZE       = 15     # quote text size
-LABEL_SIZE       = 11     # CPU/RAM label size
-STAT_SIZE        = 13     # CPU/RAM value size
+CLOCK_SIZE   = 120    # HH:MM:SS font size
+DATE_SIZE    = 20     # date text size
+QUOTE_SIZE   = 15     # quote text size
+LABEL_SIZE   = 11     # corner label size
+STAT_SIZE    = 13     # corner value size
 
-CLOCK_ZONE       = 0.65   # 0.0-1.0, how much screen height clock owns
-SEP_GAP          = 4      # gap between clock zone and separator
-DATE_GAP         = 8      # gap between separator and date
-QUOTE_GAP        = 26     # gap between date and quote
-QUOTE_LINE       = 18     # line height between quote lines
+CLOCK_ZONE   = 0.65   # 0.0-1.0, how much screen height clock owns
+SEP_GAP      = 4      # gap between clock zone and separator
+DATE_GAP     = 8      # gap between separator and date
+QUOTE_GAP    = 26     # gap between date and quote
+QUOTE_LINE   = 18     # line height between quote lines
 
-STAT_FROM_BOTTOM = 28     # distance of stats from bottom
-STAT_BAR_WIDTH   = 110    # width of CPU/RAM bars
+CORNER_PAD   = 8      # padding from screen edges for corner stats
 
-TYPE_SPEED       = 0.045  # seconds per character
-QUOTE_HOLD       = 10.0   # seconds before next quote
+TYPE_SPEED   = 0.045  # seconds per character
+QUOTE_HOLD   = 10.0   # seconds before next quote
 
 # ╔══════════════════════════════════════════════╗
 # ║           DON'T EDIT BELOW HERE              ║
 # ╚══════════════════════════════════════════════╝
 
 # ── STATS ─────────────────────────────────────────────────────
-_stats = {"cpu": 0.0, "ram": 0.0, "ram_used": 0, "ram_total": 0}
+_stats = {
+    "cpu":        0.0,
+    "ram":        0.0,
+    "ram_used":   0,
+    "ram_total":  0,
+    "temp":       0.0,
+    "disk_used":  0.0,
+    "disk_total": 0.0,
+    "ip":         "---",
+}
 
 def _update_stats():
     while True:
         try:
+            # CPU %
             cpu = subprocess.run(
                 "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'",
                 shell=True, capture_output=True, text=True
             ).stdout.strip()
             _stats["cpu"] = float(cpu) if cpu else 0.0
+
+            # RAM
             mem = subprocess.run(
                 "free -m | awk 'NR==2{print $2, $3}'",
                 shell=True, capture_output=True, text=True
@@ -63,9 +80,33 @@ def _update_stats():
                 _stats["ram_total"] = int(mem[0])
                 _stats["ram_used"]  = int(mem[1])
                 _stats["ram"]       = (_stats["ram_used"] / _stats["ram_total"]) * 100
+
+            # CPU temperature
+            temp = subprocess.run(
+                "cat /sys/class/thermal/thermal_zone0/temp",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip()
+            _stats["temp"] = float(temp) / 1000.0 if temp else 0.0
+
+            # Storage
+            disk = subprocess.run(
+                "df -BM / | awk 'NR==2{print $3, $2}'",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip().split()
+            if len(disk) == 2:
+                _stats["disk_used"]  = float(disk[0].replace("M", "")) / 1024
+                _stats["disk_total"] = float(disk[1].replace("M", "")) / 1024
+
+            # IP
+            ip = subprocess.run(
+                "hostname -I | awk '{print $1}'",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip()
+            _stats["ip"] = ip if ip else "---"
+
         except:
             pass
-        time.sleep(2)
+        time.sleep(3)
 
 threading.Thread(target=_update_stats, daemon=True).start()
 
@@ -121,7 +162,6 @@ def _update_quotes():
             _type_timer    = now
 
 # ── FONTS ─────────────────────────────────────────────────────
-# pre-load so first frame isn't slow
 _F = {}
 
 def _fonts():
@@ -133,7 +173,55 @@ def _fonts():
         _F["stat"]  = font(STAT_SIZE,  bold=True)
     return _F
 
-# ── DRAW ──────────────────────────────────────────────────────
+# ── CORNERS ───────────────────────────────────────────────────
+
+def _corner_tl(d, F):
+    """Top left — CPU % + temp"""
+    cpu_pct  = _stats["cpu"]
+    temp     = _stats["temp"]
+    cpu_col  = C["blue"]  if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
+    temp_col = C["blue"]  if temp    < 60 else C["amber"] if temp    < 75 else C["red"]
+    d.text((CORNER_PAD, CORNER_PAD),
+           "CPU", font=F["label"], fill=C["dimwhite"])
+    d.text((CORNER_PAD, CORNER_PAD + 14),
+           f"{cpu_pct:.1f}%", font=F["stat"], fill=cpu_col)
+    d.text((CORNER_PAD + 55, CORNER_PAD + 14),
+           f"{temp:.1f}C", font=F["stat"], fill=temp_col)
+
+def _corner_tr(d, F):
+    """Top right — RAM %"""
+    ram_pct = _stats["ram"]
+    ram_col = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
+    ram_str = f"{ram_pct:.1f}%"
+    lbl_w   = F["label"].getbbox("RAM")[2]
+    val_w   = F["stat"].getbbox(ram_str)[2]
+    d.text((W - CORNER_PAD - lbl_w, CORNER_PAD),
+           "RAM", font=F["label"], fill=C["dimwhite"])
+    d.text((W - CORNER_PAD - val_w, CORNER_PAD + 14),
+           ram_str, font=F["stat"], fill=ram_col)
+
+def _corner_bl(d, F):
+    """Bottom left — Storage"""
+    used  = _stats["disk_used"]
+    total = _stats["disk_total"]
+    pct   = (used / total * 100) if total > 0 else 0
+    col   = C["blue"] if pct < 70 else C["amber"] if pct < 90 else C["red"]
+    d.text((CORNER_PAD, H - CORNER_PAD - 30),
+           "DISK", font=F["label"], fill=C["dimwhite"])
+    d.text((CORNER_PAD, H - CORNER_PAD - 16),
+           f"{used:.1f}/{total:.1f}GB", font=F["stat"], fill=col)
+
+def _corner_br(d, F):
+    """Bottom right — IP"""
+    ip    = _stats["ip"]
+    lbl_w = F["label"].getbbox("IP")[2]
+    val_w = F["stat"].getbbox(ip)[2]
+    d.text((W - CORNER_PAD - lbl_w, H - CORNER_PAD - 30),
+           "IP", font=F["label"], fill=C["dimwhite"])
+    d.text((W - CORNER_PAD - val_w, H - CORNER_PAD - 16),
+           ip, font=F["stat"], fill=C["blue"])
+
+# ── MAIN DRAW ─────────────────────────────────────────────────
 _tick = 0
 
 def draw():
@@ -149,22 +237,15 @@ def draw():
     draw_scanlines(d)
 
     # ── Clock ─────────────────────────────────────────────────
-    h_str  = time.strftime("%H")
-    m_str  = time.strftime("%M")
-    s_str  = f"{sec:02d}"
-    # always solid HH:MM colon, only MM:SS colon blinks
-    full   = f"{h_str}:{m_str}:{s_str}"
-
-    # measure each part for centering
     def tw(txt, f): return f.getbbox(txt)[2] - f.getbbox(txt)[0]
     def th(txt, f): return f.getbbox(txt)[3] - f.getbbox(txt)[1]
 
     parts = [
-        (h_str,  C["white"]),
-        (":",    C["white"]),        # HH:MM — always solid
-        (m_str,  C["white"]),
-        (":",    C["blue"] if sec % 2 == 0 else C["dimblue"]),  # blinks
-        (s_str,  C["blue"]),
+        (time.strftime("%H"), C["white"]),
+        (":",                 C["white"]),
+        (time.strftime("%M"), C["white"]),
+        (":",                 C["blue"] if sec % 2 == 0 else C["dimblue"]),
+        (f"{sec:02d}",        C["blue"]),
     ]
 
     total_w    = sum(tw(p[0], F["clock"]) for p in parts)
@@ -181,10 +262,10 @@ def draw():
     sep_y = clock_zone + SEP_GAP
     d.line([(20, sep_y), (W-20, sep_y)], fill=C["dimblue"], width=1)
 
-    # ── Date ─────────────────────────────────────────────────
-    date_y   = sep_y + DATE_GAP
-    date_str = time.strftime("%A  %d %B %Y").upper()
-    draw_text_centered(d, date_str, F["date"], C["white"], date_y)
+    # ── Date ──────────────────────────────────────────────────
+    date_y = sep_y + DATE_GAP
+    draw_text_centered(d, time.strftime("%A  %d %B %Y").upper(),
+                       F["date"], C["white"], date_y)
 
     # ── Quote ─────────────────────────────────────────────────
     quote_y = date_y + DATE_SIZE + QUOTE_GAP - DATE_SIZE
@@ -194,7 +275,6 @@ def draw():
             lw = F["quote"].getbbox(line)[2] - F["quote"].getbbox(line)[0]
             d.text(((W - lw) // 2, quote_y + i * QUOTE_LINE),
                    line, font=F["quote"], fill=C["green"])
-        # blinking cursor
         if _tick % 20 < 10:
             last  = lines[min(len(lines)-1, 1)]
             lw    = F["quote"].getbbox(last)[2] - F["quote"].getbbox(last)[0]
@@ -202,28 +282,15 @@ def draw():
             cur_y = quote_y + min(len(lines)-1, 1) * QUOTE_LINE
             d.rectangle([cur_x, cur_y+2, cur_x+5, cur_y+13], fill=C["green"])
 
-    # ── Stats ─────────────────────────────────────────────────
-    stat_y  = H - STAT_FROM_BOTTOM
-    cpu_pct = _stats["cpu"]
-    ram_pct = _stats["ram"]
-    cpu_col = C["blue"] if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
-    ram_col = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
-
-    # CPU left
-    d.text((10, stat_y),    "CPU", font=F["label"], fill=C["dimwhite"])
-    d.text((36, stat_y-1),  f"{cpu_pct:.1f}%", font=F["stat"], fill=cpu_col)
-    draw_bar(d, 10, stat_y+16, STAT_BAR_WIDTH, 5, cpu_pct, cpu_col)
-
-    # RAM right
-    rx = W - STAT_BAR_WIDTH - 10
-    d.text((rx,    stat_y),   "RAM", font=F["label"], fill=C["dimwhite"])
-    d.text((rx+28, stat_y-1), f"{ram_pct:.1f}%", font=F["stat"], fill=ram_col)
-    draw_bar(d, rx, stat_y+16, STAT_BAR_WIDTH, 5, ram_pct, ram_col)
+    # ── Corners ───────────────────────────────────────────────
+    _corner_tl(d, F)
+    _corner_tr(d, F)
+    _corner_bl(d, F)
+    _corner_br(d, F)
 
     push(img)
 
-
-# ── STANDALONE TEST ───────────────────────────────────────────
+# ── STANDALONE ────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Running clock — Ctrl+C to stop")
     while True:
