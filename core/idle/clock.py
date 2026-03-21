@@ -12,7 +12,7 @@ import os
 import random
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import (
     new_frame, push, draw_text_centered, draw_bar,
     draw_scanlines, wrap_text, font, C, W, H
