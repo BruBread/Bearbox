@@ -113,6 +113,7 @@ def new_frame(bg=None):
 
 def push(img):
     """Write a PIL Image directly to the framebuffer as RGB565."""
+    img = img.rotate(180)
     rgb    = img.convert("RGB")
     arr    = np.array(rgb, dtype=np.uint16)
     r      = (arr[:, :, 0] >> 3).astype(np.uint16)
