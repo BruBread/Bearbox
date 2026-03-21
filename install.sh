@@ -166,9 +166,9 @@ ok "udev rules installed"
 # ── Aliases ────────────────────────────────────
 step "Setting up shortcuts..."
 divider
-cat /home/bearbox/bearbox/bashrc_aliases >> /home/bearbox/.bashrc
-source /home/bearbox/.bashrc 2>/dev/null || true
-ok "Shortcuts ready — type bbhelp to see them"
+grep -q "bearbox/bashrc_aliases" /home/bearbox/.bashrc || \
+    echo "source ~/bearbox/bashrc_aliases" >> /home/bearbox/.bashrc
+ok "Shortcuts ready"
 
 step "Installing BearBox service..."
 divider
