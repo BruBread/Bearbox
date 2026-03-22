@@ -1,39 +1,45 @@
-
+#!/usr/bin/env python3
 """
 BearBox — Profile Manager
-Watches for USB devices and loads the correct profile.
+Watches for USB devices and launches the correct profile.
 
-Device → Profile mapping:
-  TL-WN722N  (2357:010c) → pentest
-  USB Drive  (mass storage) → games
-  BT Adapter (varies)    → bluetooth
-  Rubber Ducky (03eb:2042) → rubberducky
+Device → Profile:
+  TL-WN722N only          → pentest
+  TL-WN722N + ethernet    → ap
+  USB Drive               → games
+  Rubber Ducky            → rubberducky
+  Nothing                 → idle
 """
 
 import subprocess
-import time
 import os
 import sys
+import time
 
-#Devices
+BASE = "/home/bearbox/bearbox"
+sys.path.insert(0, os.path.join(BASE, "core"))
+sys.path.insert(0, BASE)
+
+# ─────────────────────────────────────────────
+# DEVICE MAP
+# ─────────────────────────────────────────────
 PROFILES = {
     "2357:010c": "pentest",       # TL-WN722N
     "03eb:2042": "rubberducky",   # Rubber Ducky
-    # BT adapter — add your ID here when you get one
 }
 
-PROFILES_DIR = os.path.join(os.path.dirname(__file__), "../profiles")
+# ─────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────
 
 def run(cmd):
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     return (r.stdout + r.stderr).strip()
 
 def get_connected_devices():
-    """Return list of vendor:product IDs currently on USB."""
-    output = run("lsusb")
+    output  = run("lsusb")
     devices = []
     for line in output.split("\n"):
-        # format: Bus 001 Device 002: ID 2357:010c TP-Link
         parts = line.split("ID ")
         if len(parts) > 1:
             vid_pid = parts[1].split()[0]
@@ -41,33 +47,35 @@ def get_connected_devices():
     return devices
 
 def detect_usb_drive():
-    """Return True if a USB mass storage device is mounted."""
     output = run("lsblk -o TRAN,MOUNTPOINT | grep usb")
     return bool(output.strip())
 
+def eth_connected():
+    """Returns True if ethernet has a live link."""
+    carrier = run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip()
+    return carrier == "1"
+
 def get_active_profile():
-    """Check what's plugged in and return the profile name."""
     devices = get_connected_devices()
 
-    # check known USB IDs first
     for vid_pid, profile in PROFILES.items():
         if vid_pid in devices:
+            if profile == "pentest" and eth_connected():
+                return "ap"       # TL-WN722N + ethernet = AP mode
             return profile
 
-    # check for USB drive
     if detect_usb_drive():
         return "games"
 
     return None
 
 def launch_profile(profile: str):
-    """Launch the given profile's main script."""
     profile_map = {
-        "pentest":     "profiles/pentest/ui.py",
-        "ap": "profiles/wifi/ap/ap_main.py",
-        "games":       "profiles/games/launcher.py",
-        "bluetooth":   "profiles/bluetooth/ui.py",
-        "rubberducky": "profiles/rubberducky/ui.py",
+        "pentest":     f"{BASE}/profiles/pentest/ui.py",
+        "ap":          f"{BASE}/profiles/wifi/ap/ap_main.py",
+        "games":       f"{BASE}/profiles/games/launcher.py",
+        "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
+        "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
     }
 
     script = profile_map.get(profile)
@@ -75,13 +83,17 @@ def launch_profile(profile: str):
         print(f"Unknown profile: {profile}")
         return None
 
-    path = os.path.join(os.path.dirname(__file__), "..", script)
-    if not os.path.exists(path):
-        print(f"Profile script not found: {path}")
+    if not os.path.exists(script):
+        print(f"Profile script not found: {script}")
         return None
 
     print(f"Launching profile: {profile}")
-    return subprocess.Popen(f"sudo python3 {path}", shell=True)
+    return subprocess.Popen(f"sudo python3 {script}", shell=True)
+
+def launch_idle():
+    script = f"{BASE}/core/idle/idle_main.py"
+    print("Launching idle screen")
+    return subprocess.Popen(f"sudo python3 {script}", shell=True)
 
 # ─────────────────────────────────────────────
 # MAIN LOOP
@@ -96,7 +108,6 @@ def main():
         detected = get_active_profile()
 
         if detected != current_profile:
-            # kill current profile if running
             if current_process:
                 print(f"Stopping profile: {current_profile}")
                 current_process.terminate()
@@ -107,26 +118,9 @@ def main():
             if detected:
                 current_process = launch_profile(detected)
             else:
-                print("No device detected — idle")
-                # TODO: launch idle screen here
+                current_process = launch_idle()
 
-        time.sleep(2)  # poll every 2 seconds
-
-def get_active_profile():
-    devices = get_connected_devices()
-    eth_up  = bool(run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1")
-
-    # TL-WN722N + ethernet = AP mode
-    for vid_pid, profile in PROFILES.items():
-        if vid_pid in devices:
-            if eth_up:
-                return "ap"        # ethernet connected → AP mode
-            return profile         # no ethernet → pentest mode
-
-    if detect_usb_drive():
-        return "games"
-
-    return None
+        time.sleep(2)
 
 if __name__ == "__main__":
     if os.geteuid() != 0:

@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-BearBox — AP/Siphon Shared Utilities
-Sombra-inspired magenta/pink color scheme.
-"""
+"""BearBox AP — Shared Utilities. Sombra magenta theme."""
 
 import os
 import sys
@@ -11,12 +8,12 @@ import subprocess
 import select
 import struct
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../.."))
+BASE = "/home/bearbox/bearbox"
+sys.path.insert(0, os.path.join(BASE, "core"))
+sys.path.insert(0, BASE)
+
 from display import new_frame, push, draw_scanlines, font, W, H
 
-# ─────────────────────────────────────────────────────────────
-# SOMBRA PALETTE
-# ─────────────────────────────────────────────────────────────
 C = {
     "bg":        (8,   0,   18),
     "panel":     (18,  5,   35),
@@ -34,9 +31,6 @@ C = {
     "cyan":      (0,   220, 255),
 }
 
-# ─────────────────────────────────────────────────────────────
-# FONTS
-# ─────────────────────────────────────────────────────────────
 _F = {}
 
 def fonts():
@@ -49,16 +43,11 @@ def fonts():
         _F["huge"]  = font(32, bold=True)
     return _F
 
-# ─────────────────────────────────────────────────────────────
-# SYSTEM
-# ─────────────────────────────────────────────────────────────
-
 def run_cmd(cmd):
-    return subprocess.run(cmd, shell=True, capture_output=True,
-                          text=True).stdout.strip()
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
 def get_connected_devices():
-    devices   = []
+    devices    = []
     lease_file = "/var/lib/misc/dnsmasq.leases"
     if not os.path.exists(lease_file):
         lease_file = "/tmp/dnsmasq.leases"
@@ -67,29 +56,21 @@ def get_connected_devices():
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 4:
-                    expire          = int(parts[0])
-                    mac             = parts[1]
-                    ip              = parts[2]
-                    host            = parts[3] if parts[3] != "*" else "Unknown"
-                    connected_secs  = max(0, 86400 - (expire - int(time.time())))
-                    devices.append({
-                        "ip":        ip,
-                        "mac":       mac,
-                        "hostname":  host,
-                        "connected": connected_secs,
-                    })
+                    expire         = int(parts[0])
+                    mac            = parts[1]
+                    ip             = parts[2]
+                    host           = parts[3] if parts[3] != "*" else "Unknown"
+                    connected_secs = max(0, 86400 - (expire - int(time.time())))
+                    devices.append({"ip": ip, "mac": mac,
+                                    "hostname": host, "connected": connected_secs})
     if not devices:
         arp = run_cmd("arp -i wlan0 -n 2>/dev/null")
         for line in arp.split("\n"):
             if "wlan0" in line and "incomplete" not in line and "Address" not in line:
                 parts = line.split()
                 if len(parts) >= 3:
-                    devices.append({
-                        "ip":        parts[0],
-                        "mac":       parts[2],
-                        "hostname":  "Unknown",
-                        "connected": 0,
-                    })
+                    devices.append({"ip": parts[0], "mac": parts[2],
+                                    "hostname": "Unknown", "connected": 0})
     return devices
 
 def get_ap_ip():
@@ -97,20 +78,14 @@ def get_ap_ip():
     return ip or "10.0.0.1"
 
 def kick_device(mac):
-    result = run_cmd(f"sudo hostapd_cli -i wlan0 deauthenticate {mac} 2>/dev/null")
+    run_cmd(f"sudo hostapd_cli -i wlan0 deauthenticate {mac} 2>/dev/null")
     return True
 
 def format_duration(secs):
-    if secs < 60:
-        return f"{secs}s"
-    elif secs < 3600:
-        return f"{secs // 60}m"
-    else:
-        return f"{secs // 3600}h {(secs % 3600) // 60}m"
+    if secs < 60:   return f"{secs}s"
+    elif secs < 3600: return f"{secs // 60}m"
+    else: return f"{secs // 3600}h {(secs % 3600) // 60}m"
 
-# ─────────────────────────────────────────────────────────────
-# TOUCH
-# ─────────────────────────────────────────────────────────────
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 0.8
 _touch_fd    = None
@@ -129,15 +104,12 @@ def check_tap():
         if r:
             while True:
                 r2, _, _ = select.select([_touch_fd], [], [], 0)
-                if not r2:
-                    break
+                if not r2: break
                 data = _touch_fd.read(16)
                 if len(data) == 16:
                     _, _, etype, ecode, evalue = struct.unpack("llHHi", data)
-                    if etype == 3 and ecode == 0:
-                        _tap_x = int(evalue * W / 4096)
-                    if etype == 3 and ecode == 1:
-                        _tap_y = int(evalue * H / 4096)
+                    if etype == 3 and ecode == 0: _tap_x = int(evalue * W / 4096)
+                    if etype == 3 and ecode == 1: _tap_y = int(evalue * H / 4096)
             now = time.time()
             if now - _last_tap > TAP_COOLDOWN:
                 _last_tap = now
@@ -148,10 +120,6 @@ def check_tap():
 
 def tapped(x, y, w, h):
     return x <= _tap_x <= x + w and y <= _tap_y <= y + h
-
-# ─────────────────────────────────────────────────────────────
-# DRAW HELPERS
-# ─────────────────────────────────────────────────────────────
 
 def draw_header(d, F, title, subtitle=None):
     d.rectangle([0, 0, W, 44], fill=C["panel"])
@@ -170,21 +138,17 @@ def draw_btn(d, F, x, y, w, h, label, color, text_color=None):
     d.rectangle([x, y, x+w, y+h], fill=C["panel"], outline=color)
     lw = F["btn"].getbbox(label)[2]
     lh = F["btn"].getbbox(label)[3]
-    d.text((x + (w - lw) // 2, y + (h - lh) // 2),
-           label, font=F["btn"], fill=text_color)
+    d.text((x + (w-lw)//2, y + (h-lh)//2), label, font=F["btn"], fill=text_color)
     return (x, y, w, h)
 
 def draw_two_buttons(d, F, left_label, right_label, left_color, right_color):
-    btn_w   = 180
-    btn_h   = 52
-    btn_y   = H - btn_h - 20
-    gap     = 16
-    left_x  = (W // 2) - btn_w - gap // 2
-    right_x = (W // 2) + gap // 2
-    l = draw_btn(d, F, left_x,  btn_y, btn_w, btn_h,
-                 left_label,  left_color,  text_color=left_color)
-    r = draw_btn(d, F, right_x, btn_y, btn_w, btn_h,
-                 right_label, right_color, text_color=right_color)
+    btn_w, btn_h = 180, 52
+    btn_y  = H - btn_h - 20
+    gap    = 16
+    left_x  = (W//2) - btn_w - gap//2
+    right_x = (W//2) + gap//2
+    l = draw_btn(d, F, left_x,  btn_y, btn_w, btn_h, left_label,  left_color,  text_color=left_color)
+    r = draw_btn(d, F, right_x, btn_y, btn_w, btn_h, right_label, right_color, text_color=right_color)
     return l, r
 
 def draw_scanlines_pink(d):

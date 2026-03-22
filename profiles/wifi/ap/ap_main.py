@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""
-BearBox AP — Main Entry Point
-Sets up AP and runs Siphon UI.
-"""
+"""BearBox AP — Main Entry Point"""
 
-import os
-import sys
-import time
-import subprocess
-import signal
+import os, sys, time, subprocess, signal
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../.."))
+BASE = "/home/bearbox/bearbox"
+sys.path.insert(0, os.path.join(BASE, "core"))
+sys.path.insert(0, BASE)
+
 from display import new_frame, push, font, W, H
 from profiles.wifi.ap.ap_utils import C, fonts, draw_header, draw_scanlines_pink, run_cmd
 
@@ -22,7 +18,7 @@ DHCP_END   = "10.0.0.50"
 
 def _load_config():
     import json
-    path = os.path.join(os.path.dirname(__file__), "../../../config.json")
+    path = os.path.join(BASE, "config.json")
     if os.path.exists(path):
         with open(path) as f:
             return json.load(f)
@@ -40,7 +36,7 @@ def _show_status(msg, color=None):
 
 def setup_ap():
     cfg     = _load_config()
-    ap_ssid = cfg.get("ap_ssid",    "BearBox-AP")
+    ap_ssid = cfg.get("ap_ssid",     "BearBox-AP")
     ap_pass = cfg.get("ap_password", "Bearbox123")
 
     _show_status("Configuring AP...")
@@ -48,35 +44,22 @@ def setup_ap():
     run_cmd("sudo pkill hostapd 2>/dev/null")
     run_cmd("sudo pkill dnsmasq 2>/dev/null")
     time.sleep(1)
-
     run_cmd(f"sudo ip link set {AP_IFACE} up")
     run_cmd(f"sudo ip addr flush dev {AP_IFACE}")
     run_cmd(f"sudo ip addr add {AP_IP}/24 dev {AP_IFACE}")
 
     with open("/tmp/bb_hostapd.conf", "w") as f:
-        f.write(f"""interface={AP_IFACE}
-driver=nl80211
-ssid={ap_ssid}
-hw_mode=g
-channel=6
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase={ap_pass}
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
-""")
+        f.write(f"interface={AP_IFACE}\ndriver=nl80211\nssid={ap_ssid}\n"
+                f"hw_mode=g\nchannel=6\nwmm_enabled=0\nmacaddr_acl=0\n"
+                f"auth_algs=1\nignore_broadcast_ssid=0\nwpa=2\n"
+                f"wpa_passphrase={ap_pass}\nwpa_key_mgmt=WPA-PSK\n"
+                f"wpa_pairwise=TKIP\nrsn_pairwise=CCMP\n")
 
     with open("/tmp/bb_dnsmasq.conf", "w") as f:
-        f.write(f"""interface={AP_IFACE}
-dhcp-range={DHCP_START},{DHCP_END},255.255.255.0,24h
-dhcp-option=3,{AP_IP}
-dhcp-option=6,8.8.8.8,8.8.4.4
-server=8.8.8.8
-""")
+        f.write(f"interface={AP_IFACE}\n"
+                f"dhcp-range={DHCP_START},{DHCP_END},255.255.255.0,24h\n"
+                f"dhcp-option=3,{AP_IP}\ndhcp-option=6,8.8.8.8,8.8.4.4\n"
+                f"server=8.8.8.8\n")
 
     _show_status("Starting hostapd...")
     r = subprocess.run("sudo hostapd /tmp/bb_hostapd.conf -B",
@@ -88,7 +71,6 @@ server=8.8.8.8
 
     _show_status("Starting dnsmasq...")
     run_cmd("sudo dnsmasq --conf-file=/tmp/bb_dnsmasq.conf")
-
     _show_status("Enabling routing...")
     run_cmd("echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward > /dev/null")
     run_cmd(f"sudo iptables -A FORWARD -i {AP_IFACE} -o {ETH_IFACE} -j ACCEPT")
