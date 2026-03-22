@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BearBox Network — Connecting Screen
-Shows spinner while connecting. Returns True if successful.
+10 second timeout. Shows countdown. Returns True if connected.
 """
 
 import os
@@ -13,18 +13,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../
 from display import new_frame, push, draw_scanlines, font, C, W, H
 from network.net_utils import (
     fonts, draw_header, run_cmd,
-    get_interface, load_config, is_connected, sync_time
+    get_interface, is_connected, sync_time
 )
 
-def _connect(ssid):
-    cfg      = load_config()
-    password = ""
-    if ssid == cfg.get("hotspot_ssid"):
-        password = cfg.get("hotspot_password", "")
+TIMEOUT = 10  # seconds before giving up
 
-    iface = get_interface()
+def _connect(ssid, password, result):
+    iface    = get_interface()
     psk_line = ('psk="' + password + '"') if password else "key_mgmt=NONE"
-    wpa = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+    wpa      = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 network={{
     ssid="{ssid}"
@@ -38,44 +35,78 @@ network={{
     time.sleep(1)
     run_cmd(f"sudo ip link set {iface} up")
     run_cmd(f"sudo wpa_supplicant -B -i {iface} -c /tmp/bb_wpa.conf")
-    time.sleep(3)
-    run_cmd(f"sudo dhclient {iface}")
-    time.sleep(2)
-    return is_connected()
 
-def run(ssid):
+    # poll for connection up to TIMEOUT seconds
+    deadline = time.time() + TIMEOUT
+    while time.time() < deadline:
+        if is_connected():
+            result[0] = True
+            return
+        time.sleep(0.5)
+
+    # timed out
+    run_cmd("sudo pkill wpa_supplicant 2>/dev/null")
+    result[0] = False
+
+def run(ssid, password=""):
     F         = fonts()
-    connected = [False]
-    done      = [False]
+    result    = [None]
+    start     = time.time()
 
-    def _do():
-        connected[0] = _connect(ssid)
-        done[0]      = True
+    threading.Thread(target=_connect, args=(ssid, password, result),
+                     daemon=True).start()
 
-    threading.Thread(target=_do, daemon=True).start()
+    # spinner + countdown
+    while result[0] is None:
+        elapsed   = time.time() - start
+        remaining = max(0, TIMEOUT - int(elapsed))
+        progress  = min(elapsed / TIMEOUT, 1.0)
 
-    # connecting spinner
-    while not done[0]:
         img, d = new_frame()
         draw_scanlines(d)
         draw_header(d, F, "CONNECTING", ssid[:24], color=C["blue"])
 
+        # spinner
         t    = int(time.time() * 4) % 4
         spin = ["◐", "◓", "◑", "◒"][t]
         sw   = font(44, bold=True).getbbox(spin)[2]
-        d.text(((W - sw) // 2, H // 2 - 30), spin,
-               font=font(44, bold=True), fill=C["blue"])
+        d.text(((W - sw) // 2, H // 2 - 50),
+               spin, font=font(44, bold=True), fill=C["blue"])
 
+        # connecting message
         msg = f'Connecting to "{ssid}"...'
         mw  = F["small"].getbbox(msg)[2]
-        d.text(((W - mw) // 2, H // 2 + 26), msg,
-               font=F["small"], fill=C["dimwhite"])
+        d.text(((W - mw) // 2, H // 2 + 10),
+               msg, font=F["small"], fill=C["dimwhite"])
+
+        # timeout progress bar
+        bar_x, bar_y = 20, H // 2 + 36
+        bar_w, bar_h = W - 40, 8
+        d.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h],
+                    fill=C["dim"], outline=C["dimblue"])
+        filled = int(bar_w * progress)
+        # bar color shifts red as time runs out
+        if remaining > 6:
+            bar_col = C["blue"]
+        elif remaining > 3:
+            bar_col = C["amber"]
+        else:
+            bar_col = C["red"]
+        if filled > 0:
+            d.rectangle([bar_x, bar_y, bar_x + filled, bar_y + bar_h],
+                        fill=bar_col)
+
+        # countdown
+        countdown = f"Timeout in {remaining}s"
+        cw        = F["small"].getbbox(countdown)[2]
+        d.text(((W - cw) // 2, bar_y + bar_h + 8),
+               countdown, font=F["small"], fill=bar_col)
 
         push(img)
-        time.sleep(1 / 15)
+        time.sleep(1 / 30)
 
-    # result screen
-    if connected[0]:
+    # ── result screen ─────────────────────────────────────────
+    if result[0]:
         sync_time()
         img, d = new_frame()
         draw_scanlines(d)
@@ -91,10 +122,13 @@ def run(ssid):
         img, d = new_frame()
         draw_scanlines(d)
         draw_header(d, F, "FAILED", "could not connect", color=C["red"])
-        msg = "Connection failed. Try again."
-        mw  = F["body"].getbbox(msg)[2]
-        d.text(((W - mw) // 2, H // 2 - 10), msg,
-               font=F["body"], fill=C["red"])
+        for i, msg in enumerate([
+            "Connection failed.",
+            "Please try again.",
+        ]):
+            mw = F["body"].getbbox(msg)[2]
+            d.text(((W - mw) // 2, H // 2 - 20 + i * 28),
+                   msg, font=F["body"], fill=C["red"])
         push(img)
         time.sleep(2)
         return False
