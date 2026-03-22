@@ -1,14 +1,17 @@
 [Unit]
 Description=BearBox
 After=multi-user.target
+After=dev-fb1.device
 
 [Service]
 Type=simple
 User=root
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/python3 /home/bearbox/bearbox/core/profile_manager.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox
 
 [Install]
 WantedBy=multi-user.target
