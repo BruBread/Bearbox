@@ -62,8 +62,8 @@ def launch_idle():
     script = f"{BASE}/core/idle/idle_main.py"
     print("Launching idle screen")
     return subprocess.Popen(
-        f"env PYTHONPATH={PYTHONPATH} python3 {script}",
-        shell=True
+        ["python3", script],
+        env={**os.environ, "PYTHONPATH": PYTHONPATH}
     )
 
 def launch_profile(profile: str):
@@ -83,8 +83,8 @@ def launch_profile(profile: str):
         return None
     print(f"Launching profile: {profile}")
     return subprocess.Popen(
-        f"env PYTHONPATH={PYTHONPATH} python3 {script}",
-        shell=True
+        ["python3", script],
+        env={**os.environ, "PYTHONPATH": PYTHONPATH}
     )
 
 def stop_process(process, name):
