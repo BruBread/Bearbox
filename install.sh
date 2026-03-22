@@ -120,6 +120,23 @@ for pkg in "${PACKAGES[@]}"; do
 done
 ok "All dependencies installed"
 
+# ── LCD DRIVER ────────────────────────────────────────────────
+step "Checking LCD driver..."
+divider
+if [ -e /dev/fb1 ]; then
+    ok "LCD driver already installed (/dev/fb1 found)"
+else
+    info "LCD driver not found — installing GoodTFT driver..."
+    (git clone -q https://github.com/goodtft/LCD-show.git /tmp/LCD-show) &
+    spinner $! "Cloning LCD-show..."
+    chmod +x /tmp/LCD-show/LCD35-show
+    info "Installing LCD35 driver — Pi will reboot automatically"
+    info "After reboot, run bbinstall again to continue setup"
+    sleep 2
+    cd /tmp/LCD-show && sudo ./LCD35-show
+    # script reboots Pi here — install.sh will need to be run again
+fi
+
 # ── FONTS ─────────────────────────────────────
 step "Installing custom fonts..."
 divider
