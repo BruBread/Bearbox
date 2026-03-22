@@ -5,7 +5,7 @@ After=multi-user.target
 [Service]
 Type=simple
 User=root
-ExecStartPre=/bin/sleep 8
+ExecStartPre=/bin/sleep 15
 ExecStartPre=/bin/bash -c 'echo "FB1 exists: $(ls /dev/fb1 2>&1)" >> /tmp/bearbox_boot.log'
 ExecStartPre=/bin/bash -c 'echo "Python path: $(which python3)" >> /tmp/bearbox_boot.log'
 ExecStart=/bin/bash -c 'PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 /home/bearbox/bearbox/core/profile_manager.py >> /tmp/bearbox_boot.log 2>&1'
