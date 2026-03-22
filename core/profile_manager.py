@@ -64,6 +64,7 @@ def launch_profile(profile: str):
     """Launch the given profile's main script."""
     profile_map = {
         "pentest":     "profiles/pentest/ui.py",
+        "ap": "profiles/wifi/ap/ap_main.py",
         "games":       "profiles/games/launcher.py",
         "bluetooth":   "profiles/bluetooth/ui.py",
         "rubberducky": "profiles/rubberducky/ui.py",
@@ -110,6 +111,22 @@ def main():
                 # TODO: launch idle screen here
 
         time.sleep(2)  # poll every 2 seconds
+
+def get_active_profile():
+    devices = get_connected_devices()
+    eth_up  = bool(run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1")
+
+    # TL-WN722N + ethernet = AP mode
+    for vid_pid, profile in PROFILES.items():
+        if vid_pid in devices:
+            if eth_up:
+                return "ap"        # ethernet connected → AP mode
+            return profile         # no ethernet → pentest mode
+
+    if detect_usb_drive():
+        return "games"
+
+    return None
 
 if __name__ == "__main__":
     if os.geteuid() != 0:

@@ -113,6 +113,8 @@ PACKAGES=(
     network-manager
     macchanger
     ntpdate
+    hostapd
+    dnsmasq
 )
 for pkg in "${PACKAGES[@]}"; do
     (apt install -y -qq "$pkg" 2>/dev/null) &
