@@ -109,7 +109,7 @@ def stop_process(process, name):
 
 def main():
     print("BearBox Profile Manager started")
-    current_profile = None
+    current_profile = "uninitialized"
     current_process = None
 
     while True:
