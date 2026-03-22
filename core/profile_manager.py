@@ -20,17 +20,12 @@ BASE = "/home/bearbox/bearbox"
 sys.path.insert(0, os.path.join(BASE, "core"))
 sys.path.insert(0, BASE)
 
-# ─────────────────────────────────────────────
-# DEVICE MAP
-# ─────────────────────────────────────────────
-PROFILES = {
-    "2357:010c": "pentest",       # TL-WN722N
-    "03eb:2042": "rubberducky",   # Rubber Ducky
-}
+PYTHONPATH = f"{BASE}/core:{BASE}"
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
+PROFILES = {
+    "2357:010c": "pentest",
+    "03eb:2042": "rubberducky",
+}
 
 def run(cmd):
     r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -47,12 +42,10 @@ def get_connected_devices():
     return devices
 
 def detect_usb_drive():
-    output = run("lsblk -o TRAN,MOUNTPOINT | grep usb")
-    return bool(output.strip())
+    return bool(run("lsblk -o TRAN,MOUNTPOINT | grep usb").strip())
 
 def eth_connected():
-    carrier = run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip()
-    return carrier == "1"
+    return run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1"
 
 def get_active_profile():
     devices = get_connected_devices()
@@ -68,8 +61,10 @@ def get_active_profile():
 def launch_idle():
     script = f"{BASE}/core/idle/idle_main.py"
     print("Launching idle screen")
-    cmd = f"PYTHONPATH={BASE}/core:{BASE} python3 {script}"
-    return subprocess.Popen(f"sudo -E bash -c '{cmd}'", shell=True)
+    return subprocess.Popen(
+        f"env PYTHONPATH={PYTHONPATH} python3 {script}",
+        shell=True
+    )
 
 def launch_profile(profile: str):
     profile_map = {
@@ -87,38 +82,30 @@ def launch_profile(profile: str):
         print(f"Profile script not found: {script}")
         return None
     print(f"Launching profile: {profile}")
-    cmd = f"PYTHONPATH={BASE}/core:{BASE} python3 {script}"
-    return subprocess.Popen(f"sudo -E bash -c '{cmd}'", shell=True)
+    return subprocess.Popen(
+        f"env PYTHONPATH={PYTHONPATH} python3 {script}",
+        shell=True
+    )
 
 def stop_process(process, name):
     if process is None:
         return
-
-    # check if it was actually running before we stop it
     was_running = process.poll() is None
-
     print(f"Stopping: {name}")
     try:
         process.terminate()
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        print(f"Force killing: {name}")
         process.kill()
         process.wait()
     except Exception as e:
         print(f"Error stopping {name}: {e}")
-
-    # only show disconnect screen if something was actually running
     if was_running:
         try:
             from core.screen_disconnect import run as show_disconnect
             show_disconnect()
         except Exception as e:
             print(f"Disconnect screen error: {e}")
-
-# ─────────────────────────────────────────────
-# MAIN LOOP
-# ─────────────────────────────────────────────
 
 def main():
     print("BearBox Profile Manager started")
@@ -132,13 +119,11 @@ def main():
             stop_process(current_process, current_profile or "idle")
             current_process = None
             current_profile = detected
-
             if detected:
                 current_process = launch_profile(detected)
             else:
                 current_process = launch_idle()
 
-        # relaunch if process died unexpectedly
         if current_process and current_process.poll() is not None:
             print(f"Process died, relaunching: {current_profile or 'idle'}")
             if current_profile:
