@@ -25,13 +25,13 @@ from display import W, H, FB_DEV
 from clock import draw as draw_clock
 from hello import draw as draw_hello
 # from matrix import draw as draw_matrix
-# from bear   import draw as draw_bear
+from bear   import draw as draw_bear
 
 SCREENS = [
     ("clock", draw_clock),
     ("hello", draw_hello),
     # ("matrix", draw_matrix),
-    # ("bear",   draw_bear),
+    ("bear",   draw_bear),
 ]
 
 # ── time save ─────────────────────────────────────────────────
