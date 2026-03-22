@@ -1,11 +1,11 @@
 [Unit]
-Description=BearBox Idle Screen
+Description=BearBox
 After=multi-user.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /home/bearbox/bearbox/core/idle/idle_main.py
+ExecStart=/usr/bin/python3 /home/bearbox/bearbox/core/profile_manager.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
