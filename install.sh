@@ -112,6 +112,7 @@ PACKAGES=(
     udev
     network-manager
     macchanger
+    ntpdate
 )
 for pkg in "${PACKAGES[@]}"; do
     (apt install -y -qq "$pkg" 2>/dev/null) &

@@ -28,6 +28,8 @@ from hello import draw as draw_hello
 # ── screen order — add more as you build them ─────────────────
 
 from boot_anim import play as play_boot
+from network.net_check import run as run_network
+
 
 SCREENS = [
     draw_clock,
@@ -73,6 +75,7 @@ def _check_tap():
 
 def run():
     play_boot()   # plays once, guard prevents double play
+    run_network() #checks connection
     current = 0
 
     current = 0

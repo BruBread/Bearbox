@@ -9,8 +9,8 @@ __pycache__/
 *.pyd
 
 # Test files
-test_screen.py
-test_OS.py
+tests/
+
 
 # OS junk
 .DS_Store
