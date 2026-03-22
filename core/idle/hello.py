@@ -19,8 +19,8 @@ from display import new_frame, push, draw_scanlines, font, C, W, H
 # ║              EDIT THIS BLOCK                 ║
 # ╚══════════════════════════════════════════════╝
 
-LINE1      = "HELLO"         # first line text
-LINE2      = "LOSER"         # second line text
+LINE1      = "NO MODULES"         # first line text
+LINE2      = "DETECTED"         # second line text
 CREDIT     = "-FD"           # credit text
 
 MAIN_SIZE   = 90             # main text font size
