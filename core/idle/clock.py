@@ -28,20 +28,40 @@ from display import (
 # ║              EDIT THIS BLOCK                 ║
 # ╚══════════════════════════════════════════════╝
 
+# ── Font sizes ────────────────────────────────
 CLOCK_SIZE   = 120    # HH:MM:SS font size
+AMPM_SIZE    = 18     # AM/PM indicator size
+NETWORK_SIZE = 12     # network name size
 DATE_SIZE    = 20     # date text size
 QUOTE_SIZE   = 15     # quote text size
 LABEL_SIZE   = 11     # corner label size
 STAT_SIZE    = 13     # corner value size
 
+# ── Clock layout ──────────────────────────────
 CLOCK_ZONE   = 0.65   # 0.0-1.0, how much screen height clock owns
-SEP_GAP      = 4      # gap between clock zone and separator
+
+# ── Network name (above clock) ────────────────
+NETWORK_OFFSET_Y = 0  # pixels above the clock (negative = higher up)
+                        # 0 = right above clock, -20 = higher, +10 = closer
+
+# ── AM/PM indicator (next to seconds) ─────────
+AMPM_OFFSET_X = 4     # pixels right of seconds
+AMPM_OFFSET_Y = 0     # pixels from bottom of clock (0 = aligned with seconds bottom)
+
+# ── Separator line ────────────────────────────
+SEP_GAP      = 4      # gap between clock zone bottom and separator line
+
+# ── Date (below separator) ────────────────────
 DATE_GAP     = 8      # gap between separator and date
-QUOTE_GAP    = 26     # gap between date and quote
-QUOTE_LINE   = 18     # line height between quote lines
 
-CORNER_PAD   = 8      # padding from screen edges for corner stats
+# ── Quote (below date) ────────────────────────
+QUOTE_GAP    = 6      # gap between date and quote
+QUOTE_LINE   = 18     # line height between wrapped quote lines
 
+# ── Corner stats ──────────────────────────────
+CORNER_PAD   = 8      # padding from screen edges
+
+# ── Quote timing ──────────────────────────────
 TYPE_SPEED   = 0.045  # seconds per character
 QUOTE_HOLD   = 10.0   # seconds before next quote
 
@@ -59,6 +79,7 @@ _stats = {
     "disk_used":  0.0,
     "disk_total": 0.0,
     "ip":         "---",
+    "network":    "---",
 }
 
 def _update_stats():
@@ -103,6 +124,13 @@ def _update_stats():
                 shell=True, capture_output=True, text=True
             ).stdout.strip()
             _stats["ip"] = ip if ip else "---"
+
+            # Network SSID
+            ssid = subprocess.run(
+                "iwgetid -r 2>/dev/null || nmcli -t -f active,ssid dev wifi 2>/dev/null | grep '^yes' | cut -d: -f2",
+                shell=True, capture_output=True, text=True
+            ).stdout.strip()
+            _stats["network"] = ssid if ssid else "No WiFi"
 
         except:
             pass
@@ -166,17 +194,18 @@ _F = {}
 
 def _fonts():
     if not _F:
-        _F["clock"] = font(CLOCK_SIZE, bold=True)
-        _F["date"]  = font(DATE_SIZE,  bold=True)
-        _F["quote"] = font(QUOTE_SIZE)
-        _F["label"] = font(LABEL_SIZE)
-        _F["stat"]  = font(STAT_SIZE,  bold=True)
+        _F["clock"]   = font(CLOCK_SIZE,   bold=True)
+        _F["ampm"]    = font(AMPM_SIZE,    bold=True)
+        _F["network"] = font(NETWORK_SIZE)
+        _F["date"]    = font(DATE_SIZE,    bold=True)
+        _F["quote"]   = font(QUOTE_SIZE)
+        _F["label"]   = font(LABEL_SIZE)
+        _F["stat"]    = font(STAT_SIZE,    bold=True)
     return _F
 
 # ── CORNERS ───────────────────────────────────────────────────
 
 def _corner_tl(d, F):
-    """Top left — CPU % + temp"""
     cpu_pct  = _stats["cpu"]
     temp     = _stats["temp"]
     cpu_col  = C["blue"]  if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
@@ -189,7 +218,6 @@ def _corner_tl(d, F):
            f"{temp:.1f}C", font=F["stat"], fill=temp_col)
 
 def _corner_tr(d, F):
-    """Top right — RAM %"""
     ram_pct = _stats["ram"]
     ram_col = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
     ram_str = f"{ram_pct:.1f}%"
@@ -201,7 +229,6 @@ def _corner_tr(d, F):
            ram_str, font=F["stat"], fill=ram_col)
 
 def _corner_bl(d, F):
-    """Bottom left — Storage"""
     used  = _stats["disk_used"]
     total = _stats["disk_total"]
     pct   = (used / total * 100) if total > 0 else 0
@@ -212,7 +239,6 @@ def _corner_bl(d, F):
            f"{used:.1f}/{total:.1f}GB", font=F["stat"], fill=col)
 
 def _corner_br(d, F):
-    """Bottom right — IP"""
     ip    = _stats["ip"]
     lbl_w = F["label"].getbbox("IP")[2]
     val_w = F["stat"].getbbox(ip)[2]
@@ -236,16 +262,21 @@ def draw():
     img, d = new_frame()
     draw_scanlines(d)
 
-    # ── Clock ─────────────────────────────────────────────────
+    # ── Clock (12hr format) ───────────────────────────────────
     def tw(txt, f): return f.getbbox(txt)[2] - f.getbbox(txt)[0]
     def th(txt, f): return f.getbbox(txt)[3] - f.getbbox(txt)[1]
 
+    hour_12  = time.strftime("%I")   # 12-hour, zero padded
+    am_pm    = time.strftime("%p")   # AM or PM
+    min_str  = time.strftime("%M")
+    sec_str  = f"{sec:02d}"
+
     parts = [
-        (time.strftime("%H"), C["white"]),
-        (":",                 C["white"]),
-        (time.strftime("%M"), C["white"]),
-        (":",                 C["blue"] if sec % 2 == 0 else C["dimblue"]),
-        (f"{sec:02d}",        C["blue"]),
+        (hour_12,  C["white"]),
+        (":",      C["white"]),
+        (min_str,  C["white"]),
+        (":",      C["blue"] if sec % 2 == 0 else C["dimblue"]),  # blinks
+        (sec_str,  C["blue"]),
     ]
 
     total_w    = sum(tw(p[0], F["clock"]) for p in parts)
@@ -258,6 +289,21 @@ def draw():
         d.text((x, clock_y), text, font=F["clock"], fill=color)
         x += tw(text, F["clock"])
 
+    # ── AM/PM indicator (right of seconds, bottom aligned) ────
+    ampm_x = (W - total_w) // 2 + total_w + AMPM_OFFSET_X
+    ampm_h = th(am_pm, F["ampm"])
+    ampm_y = clock_y + clock_h - ampm_h + AMPM_OFFSET_Y
+    d.text((ampm_x, ampm_y), am_pm, font=F["ampm"], fill=C["midblue"])
+
+    # ── Network name (above clock) ────────────────────────────
+    network     = _stats["network"]
+    network_str = f"  {network}  "
+    nw          = F["network"].getbbox(network_str)[2]
+    nh          = F["network"].getbbox(network_str)[3]
+    net_y       = clock_y + NETWORK_OFFSET_Y - nh
+    d.text(((W - nw) // 2, net_y), network_str,
+           font=F["network"], fill=C["white"])
+
     # ── Separator ─────────────────────────────────────────────
     sep_y = clock_zone + SEP_GAP
     d.line([(20, sep_y), (W-20, sep_y)], fill=C["dimblue"], width=1)
@@ -268,7 +314,7 @@ def draw():
                        F["date"], C["white"], date_y)
 
     # ── Quote ─────────────────────────────────────────────────
-    quote_y = date_y + DATE_SIZE + QUOTE_GAP - DATE_SIZE
+    quote_y = date_y + DATE_SIZE + QUOTE_GAP
     if _quote_display:
         lines = wrap_text(f'"{_quote_display}"', F["quote"], W - 60)
         for i, line in enumerate(lines[:2]):

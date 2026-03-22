@@ -3,6 +3,7 @@
 BearBox Network — No Connection Warning Screen
 - Terminal noise background
 - Animated typewriter message with bullet points
+- 30 second auto-timeout with countdown in top right
 - Clean buttons, no sublabels
 Returns: "connect" or "offline"
 """
@@ -16,6 +17,8 @@ import string
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
 from display import new_frame, push, draw_scanlines, font, C, W, H
 from network.net_utils import fonts, draw_header, draw_two_buttons, check_tap, tapped
+
+TIMEOUT = 30  # seconds before auto going offline
 
 # ── terminal bg ───────────────────────────────────────────────
 _BG_CHARS = list(string.ascii_letters + string.digits + "!@#$%^&*<>/?\\|[]{}=+-")
@@ -50,21 +53,21 @@ class _BgCol:
                        fill=(0, b, int(b * 0.5)))
 
 # ── message ───────────────────────────────────────────────────
-# each entry is a separate line — bullets render differently
 _LINES = [
-    ("text",   "BEARBOX is not connected to the internet"),
-    ("text",   "The following may not properly work:"),
+    ("text",   "BEARBOX is not connected"),
+    ("text",   "to the internet."),
+    ("text",   "The following may not"),
+    ("text",   "properly work:"),
     ("bullet", "Time sync"),
     ("bullet", "Package updates"),
 ]
 
-# flat string for typewriter — bullets get a prefix
 _FULL_TEXT = "\n".join(
-    ("  • " + txt) if kind == "bullet" else txt
+    ("  * " + txt) if kind == "bullet" else txt
     for kind, txt in _LINES
 )
 
-_TYPE_SPEED = 0.025  # fast typewriter
+_TYPE_SPEED = 0.025
 
 def run():
     F      = fonts()
@@ -83,10 +86,17 @@ def run():
 
     while True:
         pulse += 1
-        now    = time.time()
+        now     = time.time()
+        elapsed = now - start
+
+        # ── auto timeout ──────────────────────────────────────
+        if elapsed >= TIMEOUT:
+            return "offline"
+
+        remaining = int(TIMEOUT - elapsed)
 
         # advance typewriter
-        char_i = min(int((now - start) / _TYPE_SPEED), len(_FULL_TEXT))
+        char_i = min(int(elapsed / _TYPE_SPEED), len(_FULL_TEXT))
         typed  = _FULL_TEXT[:char_i]
 
         img, d = new_frame()
@@ -100,6 +110,25 @@ def run():
         draw_header(d, F, "NO CONNECTION",
                     "internet not detected", color=C["amber"])
 
+        # ── countdown timer top right ─────────────────────────
+        # color shifts from blue → amber → red as time runs out
+        if remaining > 20:
+            timer_col = C["blue"]
+        elif remaining > 10:
+            timer_col = C["amber"]
+        else:
+            timer_col = C["red"]
+
+        # draw circle-ish countdown
+        timer_str = f"{remaining}s"
+        tw = F["big"].getbbox(timer_str)[2]
+        tx = W - tw - 10
+        ty = 10
+        # dim background pill
+        d.rectangle([tx - 6, ty - 2, tx + tw + 6, ty + 22],
+                    fill=C["panel"], outline=timer_col)
+        d.text((tx, ty), timer_str, font=F["big"], fill=timer_col)
+
         # pulsing ! icon
         amp   = abs((pulse % 60) - 30) / 30.0
         w_col = (255, int(80 + amp * 175), 0)
@@ -107,19 +136,20 @@ def run():
         d.text(((W - iw) // 2, 50), "!",
                font=font(36, bold=True), fill=w_col)
 
-        # render typed lines
+        # typed message
         lines = typed.split("\n")
         for i, ln in enumerate(lines[:7]):
-            is_bullet = ln.startswith("  •")
+            is_bullet = ln.startswith("  *")
             col       = C["amber"] if is_bullet else C["white"]
-            lw        = F["body"].getbbox(ln)[2]
-            # bullets left-align, regular text centered
+            # replace * with bullet character
+            display   = ln.replace("  *", "  •")
+            lw        = F["body"].getbbox(display)[2]
             x = 24 if is_bullet else (W - lw) // 2
-            d.text((x, 96 + i * 22), ln, font=F["body"], fill=col)
+            d.text((x, 96 + i * 22), display, font=F["body"], fill=col)
 
-        # blinking cursor while typing
+        # blinking cursor
         if char_i < len(_FULL_TEXT) and int(now * 6) % 2 == 0 and lines:
-            last    = lines[-1]
+            last    = lines[-1].replace("  *", "  •")
             lw      = F["body"].getbbox(last)[2]
             is_b    = last.startswith("  •")
             cur_x   = (24 + lw + 2) if is_b else ((W - lw) // 2 + lw + 2)
@@ -135,6 +165,12 @@ def run():
         l_rect, r_rect = draw_two_buttons(
             d, F, "CONNECT", "GO OFFLINE", C["green"], C["red"]
         )
+
+        # auto offline hint
+        hint = f"Auto offline in {remaining}s"
+        hw   = F["small"].getbbox(hint)[2]
+        d.text(((W - hw) // 2, btn_y + btn_h + 4),
+               hint, font=F["small"], fill=C["dimblue"])
 
         push(img)
 
