@@ -114,6 +114,7 @@ def main():
 
     while True:
         detected = get_active_profile()
+        print(f"Detected: {detected}, Current: {current_profile}")
 
         if detected != current_profile:
             stop_process(current_process, current_profile or "idle")
@@ -122,7 +123,9 @@ def main():
             if detected:
                 current_process = launch_profile(detected)
             else:
+                print("About to launch idle...")  # ADD THIS
                 current_process = launch_idle()
+                print(f"Idle PID: {current_process.pid if current_process else 'NONE'}")
 
         if current_process and current_process.poll() is not None:
             print(f"Process died, relaunching: {current_profile or 'idle'}")
