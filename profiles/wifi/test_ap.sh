@@ -8,7 +8,7 @@
 
 AP_SSID="BearBox-AP"
 AP_PASS="Bearbox123"
-AP_IFACE="wlan1"
+AP_IFACE="wlan0"
 ETH_IFACE="eth0"
 AP_IP="10.0.0.1"
 AP_SUBNET="10.0.0.0/24"
