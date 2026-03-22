@@ -171,6 +171,31 @@ grep -q "bearbox/bashrc_aliases" /home/bearbox/.bashrc || \
     echo "source ~/bearbox/bashrc_aliases" >> /home/bearbox/.bashrc
 ok "Shortcuts ready"
 
+# ── STEP: WIFI AUTO-CONNECT ───────────────────────────────────
+step "Configuring WiFi auto-connect..."
+divider
+if [ -f /home/bearbox/bearbox/config.json ]; then
+    SSID=$(python3 -c "import json; c=json.load(open('/home/bearbox/bearbox/config.json')); print(c['hotspot_ssid'])")
+    PSK=$(python3 -c "import json; c=json.load(open('/home/bearbox/bearbox/config.json')); print(c['hotspot_password'])")
+    if ! grep -q "$SSID" /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null; then
+        cat >> /etc/wpa_supplicant/wpa_supplicant.conf << EOF
+
+network={
+    ssid="$SSID"
+    psk="$PSK"
+    priority=10
+}
+EOF
+        ok "WiFi auto-connect configured for $SSID"
+    else
+        ok "WiFi already configured for $SSID"
+    fi
+else
+    info "No config.json found — skipping WiFi setup"
+    info "Create config.json and re-run install.sh"
+fi
+
+
 step "Installing BearBox service..."
 divider
 (cp /home/bearbox/bearbox/services/bearbox.service /etc/systemd/system/ && \

@@ -59,6 +59,10 @@ def get_interface():
         return "wlan1"
     return "wlan0"
 
+def get_current_ssid():
+    """Returns currently connected SSID or empty string."""
+    return run_cmd("iwgetid -r 2>/dev/null")
+
 def load_config():
     import json
     path = os.path.join(os.path.dirname(__file__), "../../config.json")
@@ -67,8 +71,46 @@ def load_config():
             return json.load(f)
     return {}
 
+def safe_connect(ssid, password=""):
+    """
+    Connect to a network safely.
+    Only kills wpa_supplicant if switching to a different network.
+    Never disrupts an existing working connection.
+    """
+    iface        = get_interface()
+    current_ssid = get_current_ssid()
+    psk_line     = ('psk="' + password + '"') if password else "key_mgmt=NONE"
+
+    wpa = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+network={{
+    ssid="{ssid}"
+    {psk_line}
+}}
+"""
+    with open("/tmp/bb_wpa.conf", "w") as f:
+        f.write(wpa)
+
+    # only kill wpa_supplicant if switching networks
+    if current_ssid != ssid:
+        run_cmd("sudo pkill wpa_supplicant 2>/dev/null")
+        time.sleep(1)
+
+    run_cmd(f"sudo ip link set {iface} up")
+    run_cmd(f"sudo wpa_supplicant -B -i {iface} -c /tmp/bb_wpa.conf")
+
+    # poll for connection
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if is_connected():
+            return True
+        time.sleep(0.5)
+
+    run_cmd("sudo pkill wpa_supplicant 2>/dev/null")
+    return False
+
 # ─────────────────────────────────────────────────────────────
-# TOUCH — simple click detection
+# TOUCH
 # ─────────────────────────────────────────────────────────────
 _touch_fd = None
 _last_tap  = 0
@@ -76,7 +118,6 @@ _tap_x     = 0
 _tap_y     = 0
 
 def check_tap():
-    """Returns True if screen was tapped. Updates _tap_x, _tap_y."""
     global _touch_fd, _last_tap, _tap_x, _tap_y
     if not os.path.exists(TOUCH_DEV):
         return False
@@ -92,9 +133,9 @@ def check_tap():
                 data = _touch_fd.read(16)
                 if len(data) == 16:
                     _, _, etype, ecode, evalue = struct.unpack("llHHi", data)
-                    if etype == 3 and ecode == 0:   # ABS_X
+                    if etype == 3 and ecode == 0:
                         _tap_x = int(evalue * W / 4096)
-                    if etype == 3 and ecode == 1:   # ABS_Y
+                    if etype == 3 and ecode == 1:
                         _tap_y = int(evalue * H / 4096)
             now = time.time()
             if now - _last_tap > TAP_COOLDOWN:
@@ -105,7 +146,6 @@ def check_tap():
     return False
 
 def tapped(x, y, w, h):
-    """Returns True if last tap was inside this rectangle."""
     return x <= _tap_x <= x + w and y <= _tap_y <= y + h
 
 # ─────────────────────────────────────────────────────────────
@@ -123,7 +163,6 @@ def draw_header(d, F, title, subtitle=None, color=None):
         d.text(((W - sw) // 2, 32), subtitle, font=F["small"], fill=C["dimwhite"])
 
 def draw_btn(d, F, x, y, w, h, label, color, text_color=None):
-    """Draw a button. Returns its rect (x, y, w, h) for tapped() checks."""
     text_color = text_color or C["white"]
     d.rectangle([x, y, x+w, y+h], fill=C["panel"], outline=color)
     lw = F["btn"].getbbox(label)[2]
@@ -133,14 +172,10 @@ def draw_btn(d, F, x, y, w, h, label, color, text_color=None):
     return (x, y, w, h)
 
 def draw_two_buttons(d, F, left_label, right_label, left_color, right_color):
-    """
-    Draw two side-by-side buttons at bottom of screen.
-    Returns (left_rect, right_rect) for tapped() checks.
-    """
-    btn_w  = 180
-    btn_h  = 52
-    btn_y  = H - btn_h - 20
-    gap    = 16
+    btn_w   = 180
+    btn_h   = 52
+    btn_y   = H - btn_h - 20
+    gap     = 16
     left_x  = (W // 2) - btn_w - gap // 2
     right_x = (W // 2) + gap // 2
     l = draw_btn(d, F, left_x,  btn_y, btn_w, btn_h,
