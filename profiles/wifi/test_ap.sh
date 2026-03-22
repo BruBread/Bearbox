@@ -98,6 +98,13 @@ systemctl stop dnsmasq  2>/dev/null || true
 # tell NetworkManager to leave wlan1 alone
 nmcli device set $AP_IFACE managed no 2>/dev/null || true
 echo -e "${BGRN}✓ Done${NC}"
+# kill wpa_supplicant on wlan1
+sudo pkill -f "wpa_supplicant.*wlan1" 2>/dev/null || true
+# make sure interface is in managed mode
+sudo ip link set wlan1 down
+sudo iw wlan1 set type managed
+sudo ip link set wlan1 up
+sleep 1
 
 # ── CONFIGURE INTERFACE ───────────────────────────────────────
 echo -e "${BCYN}Configuring $AP_IFACE...${NC}"
