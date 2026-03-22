@@ -5,6 +5,7 @@
 # ============================================================
 
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
 # ── COLORS ───────────────────────────────────────────────────
 BGRN='\033[1;32m'
@@ -16,12 +17,10 @@ GRN='\033[0;32m'
 RED='\033[0;31m'
 CYN='\033[0;36m'
 DIM='\033[2m'
-BOLD='\033[1m'
 NC='\033[0m'
 
 # ── TERMINAL SIZE ─────────────────────────────────────────────
 COLS=$(tput cols 2>/dev/null || echo 80)
-ROWS=$(tput lines 2>/dev/null || echo 24)
 
 # ── STEPS ─────────────────────────────────────────────────────
 TOTAL_STEPS=9
@@ -29,11 +28,9 @@ CURRENT_STEP=0
 CURRENT_MSG="Initializing..."
 CURRENT_STATUS=""
 
-# ── UI FUNCTIONS ──────────────────────────────────────────────
-
+# ── UI ────────────────────────────────────────────────────────
 hide_cursor() { tput civis 2>/dev/null; }
 show_cursor() { tput cnorm 2>/dev/null; }
-clear_screen() { clear; }
 
 draw_bar() {
     local pct=$1
@@ -41,17 +38,16 @@ draw_bar() {
     local filled=$(( w * pct / 100 ))
     local empty=$(( w - filled ))
     printf "  ${BGRN}"
-    printf '%0.s█' $(seq 1 $filled) 2>/dev/null || printf '%*s' $filled | tr ' ' '█'
+    for i in $(seq 1 $filled); do printf "█"; done
     printf "${DIM}"
-    printf '%0.s░' $(seq 1 $empty) 2>/dev/null || printf '%*s' $empty | tr ' ' '░'
-    printf "${NC}"
+    for i in $(seq 1 $empty); do printf "░"; done
+    printf "${NC}\n"
 }
 
 draw_ui() {
     local pct=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
-    clear_screen
+    clear
 
-    # banner
     echo ""
     echo -e "${BGRN}"
     echo '  ██████╗ ███████╗ █████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗'
@@ -66,7 +62,6 @@ draw_ui() {
     echo -e "  ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo ""
 
-    # step list — show all steps, highlight current
     local steps=(
         "Update system packages"
         "Install dependencies"
@@ -93,15 +88,10 @@ draw_ui() {
     echo ""
     echo -e "  ${DIM}────────────────────────────────────────────────────────────${NC}"
     echo ""
-
-    # progress bar
     draw_bar $pct
-    echo ""
     printf "  ${BCYN}%d%%${NC}  ${DIM}%s${NC}\n" $pct "$CURRENT_MSG"
-
-    # status line
     if [ -n "$CURRENT_STATUS" ]; then
-        printf "  ${DIM}%s${NC}\n" "$CURRENT_STATUS"
+        printf "       ${DIM}%s${NC}\n" "$CURRENT_STATUS"
     fi
 }
 
@@ -120,7 +110,7 @@ set_status() {
 finish_step() {
     CURRENT_STATUS="✓ $1"
     draw_ui
-    sleep 0.3
+    sleep 0.2
 }
 
 fail() {
@@ -129,10 +119,8 @@ fail() {
     exit 1
 }
 
-# ── CLEANUP ON EXIT ───────────────────────────────────────────
 trap show_cursor EXIT
 hide_cursor
-clear_screen
 
 # ── ROOT CHECK ────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
@@ -157,7 +145,10 @@ begin_step "Updating system packages..."
 set_status "Running apt update..."
 apt update -qq > /dev/null 2>&1
 set_status "Running apt upgrade..."
-apt upgrade -y -qq > /dev/null 2>&1
+apt upgrade -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    > /dev/null 2>&1
 finish_step "System up to date"
 
 # ── STEP 2: DEPENDENCIES ──────────────────────────────────────
@@ -165,12 +156,16 @@ begin_step "Installing dependencies..."
 PACKAGES=(
     git python3-pygame python3-psutil fonts-dejavu
     aircrack-ng libts-dev evtest python3-pip
-    udev network-manager macchanger ntpdate pillow
+    udev network-manager macchanger ntpdate
 )
 for pkg in "${PACKAGES[@]}"; do
     set_status "Installing $pkg..."
-    apt install -y -qq "$pkg" > /dev/null 2>&1 || true
+    apt install -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        "$pkg" > /dev/null 2>&1 || true
 done
+set_status "Installing Python packages..."
 pip3 install pillow numpy --break-system-packages -q > /dev/null 2>&1 || true
 finish_step "All dependencies installed"
 
@@ -220,7 +215,6 @@ finish_step "SSH key configured — no password needed from your PC"
 # ── STEP 7: UDEV ──────────────────────────────────────────────
 begin_step "Installing udev rules..."
 if [ -f /home/bearbox/bearbox/udev/99-bearbox.rules ]; then
-    set_status "Copying udev rules..."
     cp /home/bearbox/bearbox/udev/99-bearbox.rules /etc/udev/rules.d/
     udevadm control --reload-rules
     udevadm trigger
@@ -229,8 +223,7 @@ else
     finish_step "No udev rules found — skipping"
 fi
 
-# ── STEP 7.5: ALIASES ─────────────────────────────────────────
-set_status "Setting up shortcuts..."
+# aliases
 grep -q "bearbox/bashrc_aliases" /home/bearbox/.bashrc || \
     echo "source ~/bearbox/bashrc_aliases" >> /home/bearbox/.bashrc
 
