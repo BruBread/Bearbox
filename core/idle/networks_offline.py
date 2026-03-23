@@ -2,9 +2,9 @@
 """
 BearBox Offline — Saved Networks Screen
 Shows up to 4 saved networks as tappable buttons.
+Uses wlan1 (TL-WN722N) to connect while wlan0 stays as AP.
 Tap a network → connects immediately.
-Tap anywhere else → cycles back to clock.
-Red color scheme to match offline mode.
+Tap anywhere else → cycles back.
 """
 
 import os
@@ -18,11 +18,9 @@ import struct
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────
 CONFIG_PATH  = "/home/bearbox/bearbox/config.json"
 MAX_NETWORKS = 4
+CONNECT_IFACE = "wlan1"   # TL-WN722N — wlan0 stays as AP
 
 R = {
     "bg":       (12,  0,   0),
@@ -90,24 +88,24 @@ def _load_saved_networks():
         return {}
 
 def _try_connect(ssid, password):
-    iface    = "wlan0"
+    """Connect via wlan1 — wlan0 stays as AP."""
+    iface    = CONNECT_IFACE
     psk_line = ('psk="' + password + '"') if password else "key_mgmt=NONE"
     wpa      = (f"ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
                 f"update_config=1\nnetwork={{\n"
                 f"    ssid=\"{ssid}\"\n    {psk_line}\n    priority=10\n}}\n")
 
-    _run("sudo pkill hostapd 2>/dev/null")
-    _run("sudo pkill dnsmasq 2>/dev/null")
-    time.sleep(1)
     with open("/tmp/bb_saved.conf", "w") as f:
         f.write(wpa)
-    _run("sudo pkill wpa_supplicant 2>/dev/null")
+
+    _run(f"sudo pkill -f 'wpa_supplicant.*{iface}' 2>/dev/null")
     time.sleep(0.5)
     _run(f"sudo ip link set {iface} up")
     _run(f"sudo wpa_supplicant -B -i {iface} -c /tmp/bb_saved.conf 2>/dev/null")
     time.sleep(4)
     _run(f"sudo dhcpcd {iface} 2>/dev/null || sudo dhclient {iface} 2>/dev/null")
     time.sleep(2)
+
     r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
     return r.returncode == 0
 
@@ -122,16 +120,17 @@ def _draw_connecting(ssid):
         spin = ["◐", "◓", "◑", "◒"][t]
         sw   = font(40, bold=True).getbbox(spin)[2]
         d.text(((W-sw)//2, H//2-40), spin, font=font(40, bold=True), fill=R["red"])
-        msg  = f'Connecting to "{ssid}"...'
+        msg  = f'Connecting via {CONNECT_IFACE}...'
+        msg2 = f'"{ssid}"'
         mw   = Fs.getbbox(msg)[2]
-        d.text(((W-mw)//2, H//2+10), msg, font=Fs, fill=R["dimwhite"])
+        mw2  = Fs.getbbox(msg2)[2]
+        d.text(((W-mw)//2,  H//2+10), msg,  font=Fs, fill=R["dimwhite"])
+        d.text(((W-mw2)//2, H//2+28), msg2, font=Fs, fill=R["white"])
         push(img)
         time.sleep(1/15)
 
 def run():
-    """
-    Returns ("connected", ssid) or ("cycle", None)
-    """
+    """Returns ("connected", ssid) or ("cycle", None)"""
     F      = font(16, bold=True)
     Ft     = font(20, bold=True)
     Fs     = font(11)
@@ -140,7 +139,6 @@ def run():
     networks = _load_saved_networks()
     ssids    = list(networks.keys())[:MAX_NETWORKS]
 
-    # 2-column grid layout
     BTN_W  = 210
     BTN_H  = 60
     GAP    = 10
@@ -174,34 +172,31 @@ def run():
         d.text(((W-sw)//2, 36), sub, font=Fs, fill=R["dimred"])
 
         if not ssids:
-            msg = "No saved networks found"
-            mw  = F.getbbox(msg)[2]
-            d.text(((W-mw)//2, H//2-10), msg, font=F, fill=R["dimred"])
-            sub2 = "SSH in and use bbconnect"
-            sw2  = Fs.getbbox(sub2)[2]
-            d.text(((W-sw2)//2, H//2+20), sub2, font=Fs, fill=R["dimred"])
+            msg  = "No saved networks found"
+            msg2 = "SSH in: bbconnect"
+            mw   = F.getbbox(msg)[2]
+            mw2  = Fs.getbbox(msg2)[2]
+            d.text(((W-mw)//2,  H//2-14), msg,  font=F,  fill=R["dimred"])
+            d.text(((W-mw2)//2, H//2+14), msg2, font=Fs, fill=R["darkred"])
         else:
             for (bx, by, bw, bh, ssid) in btn_rects:
                 amp    = abs((pulse % 60) - 30) / 30.0
                 border = (int(50 + amp * 70), 0, 0)
                 d.rectangle([bx, by, bx+bw, by+bh],
                             fill=R["panel"], outline=border)
-                # network name centered
                 lw = F.getbbox(ssid[:20])[2]
                 lh = F.getbbox(ssid[:20])[3]
-                d.text((bx + (bw-lw)//2, by + (bh-lh)//2),
+                d.text((bx+(bw-lw)//2, by+(bh-lh)//2),
                        ssid[:20], font=F, fill=R["white"])
-                # open/secured indicator
                 has_pass = bool(networks.get(ssid, ""))
                 tag      = "secured" if has_pass else "open"
                 tag_col  = R["dimwhite"] if has_pass else R["midred"]
                 tw2      = Fs.getbbox(tag)[2]
-                d.text((bx + (bw-tw2)//2, by + bh - 16),
-                       tag, font=Fs, fill=tag_col)
+                d.text((bx+(bw-tw2)//2, by+bh-16), tag, font=Fs, fill=tag_col)
 
         # footer
         d.rectangle([0, H-22, W, H], fill=R["panel"])
-        hint = "OFFLINE  •  SSH: bearbox@10.0.0.1"
+        hint = f"AP: BearBox-AP  •  SSH: bearbox@10.0.0.1"
         hw   = Fs.getbbox(hint)[2]
         d.text(((W-hw)//2, H-14), hint, font=Fs, fill=R["dimred"])
 
@@ -216,7 +211,6 @@ def run():
                     if _try_connect(ssid, networks.get(ssid, "")):
                         return "connected", ssid
                     else:
-                        # failed — show error briefly
                         img2, d2 = new_frame(bg=R["bg"])
                         for y in range(0, H, 4):
                             d2.line([(0, y), (W, y)], fill=(18, 0, 0))
