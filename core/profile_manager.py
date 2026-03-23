@@ -47,10 +47,18 @@ def detect_usb_drive():
 def eth_connected():
     return run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1"
 
+def _is_offline_mode():
+    """Check if we're currently in offline mode by seeing if AP is running."""
+    r = subprocess.run("pgrep -f idle_offline", shell=True, capture_output=True)
+    return r.returncode == 0
+
 def get_active_profile():
     devices = get_connected_devices()
     for vid_pid, profile in PROFILES.items():
         if vid_pid in devices:
+            # don't switch to pentest if we're in offline mode
+            if profile == "pentest" and _is_offline_mode():
+                return None   # stay in idle/offline
             if profile == "pentest" and eth_connected():
                 return "ap"
             return profile
