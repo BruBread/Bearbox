@@ -3,17 +3,15 @@
 BearBox Network — Main Entry Point
 1. Restore saved time
 2. If already connected → sync time → return (silent)
-3. Try auto-connect to hotspot via wlan0
+3. Try auto-connect to hotspot
 4. If connected → sync → CONNECTED screen → return
-5. If not → show PLUG IN ADAPTER screen
-6. Once adapter detected → AP on wlan0, wlan1 for connecting
-7. Launch offline mode
+5. If not → launch offline mode directly (AP starts, clock shows)
+   Adapter screen only appears when user tries to connect to saved networks.
 """
 
 import os
 import sys
 import time
-import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
 from network.net_utils import is_connected, sync_time, run_cmd, get_interface, load_config
@@ -66,7 +64,7 @@ def _try_hotspot():
 def run():
     _restore_time()
 
-    # already connected — silent
+    # already connected — silent sync, no screen
     if is_connected():
         sync_time()
         return
@@ -79,15 +77,10 @@ def run():
         play_connected()
         return
 
-    # no internet — show plug adapter screen first
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    from screen_plug_adapter import run as wait_adapter
-    wait_adapter()
-
-    # adapter plugged in — launch offline mode
-    # wlan0 = AP for SSH access
-    # wlan1 = used for connecting to saved networks
-    print(">> Launching offline mode with AP...")
+    # not connected — go straight to offline mode
+    # AP starts automatically, clock shows immediately
+    # adapter screen only appears when user taps to saved networks
+    print(">> No internet — launching offline mode")
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
     from idle_offline import run as run_offline
     run_offline()

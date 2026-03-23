@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 BearBox Idle — Offline Mode
+Boots straight into red clock with AP running in background.
 3 screens cycling on tap:
   0. Red Clock
   1. OFFLINE screen
-  2. Saved Networks (tap network to connect, tap outside to go back)
+  2. Saved Networks (shows adapter screen if needed before connecting)
 
-Silent AP in background for SSH access.
-Checks internet every 10 seconds.
+AP on wlan0 starts immediately — no adapter required for clock/offline screens.
+Adapter only needed when user tries to connect via saved networks screen.
 """
 
 import os
@@ -18,10 +19,11 @@ import threading
 import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
 
-from clock_offline   import draw as draw_clock
-from hello_offline   import draw as draw_offline
-from networks_offline import run as run_networks
+from clock_offline    import draw as draw_clock
+from hello_offline    import draw as draw_offline
+from networks_offline import run  as run_networks
 
 AP_IFACE = "wlan0"
 AP_IP    = "10.0.0.1"
@@ -31,7 +33,12 @@ AP_PASS  = "Bearbox123"
 def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
+def _is_connected():
+    r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
+    return r.returncode == 0
+
 def _setup_ap():
+    """Start AP on wlan0 silently."""
     try:
         _run(f"nmcli device set {AP_IFACE} managed no 2>/dev/null")
         _run("sudo pkill hostapd 2>/dev/null")
@@ -63,10 +70,6 @@ def _teardown_ap():
     _run(f"sudo ip addr flush dev {AP_IFACE} 2>/dev/null")
     _run(f"nmcli device set {AP_IFACE} managed yes 2>/dev/null")
 
-def _is_connected():
-    r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
-    return r.returncode == 0
-
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 1.2
 _touch_fd    = None
@@ -97,21 +100,32 @@ def _check_tap():
 CHECK_EVERY = 10
 
 def run():
+    # start AP immediately in background — no adapter needed for this
     threading.Thread(target=_setup_ap, daemon=True).start()
 
-    # screens 0 and 1 are simple draw loops
-    # screen 2 is the networks screen (has its own loop)
     DRAW_SCREENS = [draw_clock, draw_offline]
-    current      = 0       # 0=clock, 1=offline, 2=networks
-    last_check   = time.time()
+    current      = 0
+    last_inet    = time.time()
 
     print(f"Offline mode | AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
 
     try:
         while True:
 
+            # internet check
+            if time.time() - last_inet > CHECK_EVERY:
+                last_inet = time.time()
+                if _is_connected():
+                    print(">> Internet detected!")
+                    _teardown_ap()
+                    from screen_connected import run as play_connected
+                    play_connected()
+                    subprocess.run("sudo systemctl restart bearbox", shell=True)
+                    return
+
+            # draw screens
             if current == 2:
-                # networks screen has its own loop
+                # networks screen — handles its own adapter check internally
                 result, ssid = run_networks()
                 if result == "connected":
                     print(f">> Connected to {ssid}!")
@@ -121,7 +135,6 @@ def run():
                     subprocess.run("sudo systemctl restart bearbox", shell=True)
                     return
                 else:
-                    # tapped outside — go back to clock
                     current = 0
                     continue
             else:
@@ -129,17 +142,6 @@ def run():
                 if _check_tap():
                     current = (current + 1) % 3
                     print(f">> Screen: {['clock','offline','networks'][current]}")
-
-            # check internet periodically
-            if time.time() - last_check > CHECK_EVERY:
-                last_check = time.time()
-                if _is_connected():
-                    print(">> Internet detected!")
-                    _teardown_ap()
-                    from screen_connected import run as play_connected
-                    play_connected()
-                    subprocess.run("sudo systemctl restart bearbox", shell=True)
-                    return
 
             time.sleep(1/30)
 

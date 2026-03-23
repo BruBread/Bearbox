@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 BearBox Offline — Saved Networks Screen
-Shows up to 4 saved networks as tappable buttons.
-Uses wlan1 (TL-WN722N) to connect while wlan0 stays as AP.
-Tap a network → connects immediately.
-Tap anywhere else → cycles back.
+Shows adapter screen first if TL-WN722N not plugged in.
+Then shows saved networks as tappable buttons.
+Uses wlan1 for connecting while wlan0 stays as AP.
 """
 
 import os
@@ -18,9 +17,9 @@ import struct
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
 
-CONFIG_PATH  = "/home/bearbox/bearbox/config.json"
-MAX_NETWORKS = 4
-CONNECT_IFACE = "wlan1"   # TL-WN722N — wlan0 stays as AP
+CONFIG_PATH   = "/home/bearbox/bearbox/config.json"
+MAX_NETWORKS  = 4
+CONNECT_IFACE = "wlan1"
 
 R = {
     "bg":       (12,  0,   0),
@@ -74,6 +73,10 @@ def _tapped(x, y, w, h):
 def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
+def _tplink_connected():
+    out = subprocess.run("lsusb", shell=True, capture_output=True, text=True).stdout
+    return "2357:010c" in out or "TP-Link" in out
+
 def _load_saved_networks():
     try:
         with open(CONFIG_PATH) as f:
@@ -88,16 +91,13 @@ def _load_saved_networks():
         return {}
 
 def _try_connect(ssid, password):
-    """Connect via wlan1 — wlan0 stays as AP."""
     iface    = CONNECT_IFACE
     psk_line = ('psk="' + password + '"') if password else "key_mgmt=NONE"
     wpa      = (f"ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
                 f"update_config=1\nnetwork={{\n"
                 f"    ssid=\"{ssid}\"\n    {psk_line}\n    priority=10\n}}\n")
-
     with open("/tmp/bb_saved.conf", "w") as f:
         f.write(wpa)
-
     _run(f"sudo pkill -f 'wpa_supplicant.*{iface}' 2>/dev/null")
     time.sleep(0.5)
     _run(f"sudo ip link set {iface} up")
@@ -105,12 +105,11 @@ def _try_connect(ssid, password):
     time.sleep(4)
     _run(f"sudo dhcpcd {iface} 2>/dev/null || sudo dhclient {iface} 2>/dev/null")
     time.sleep(2)
-
     r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
     return r.returncode == 0
 
 def _draw_connecting(ssid):
-    Fs = font(13)
+    Fs    = font(13)
     start = time.time()
     while time.time() - start < 8:
         img, d = new_frame(bg=R["bg"])
@@ -130,7 +129,18 @@ def _draw_connecting(ssid):
         time.sleep(1/15)
 
 def run():
-    """Returns ("connected", ssid) or ("cycle", None)"""
+    """
+    Shows adapter screen if needed, then saved networks.
+    Returns ("connected", ssid) or ("cycle", None)
+    """
+    # check if adapter is plugged in before showing networks
+    if not _tplink_connected():
+        from screen_plug_adapter import run as wait_adapter
+        wait_adapter()
+        # if user somehow exits without adapter, cycle back
+        if not _tplink_connected():
+            return "cycle", None
+
     F      = font(16, bold=True)
     Ft     = font(20, bold=True)
     Fs     = font(11)
@@ -156,8 +166,12 @@ def run():
 
     while True:
         pulse += 1
-        img, d = new_frame(bg=R["bg"])
 
+        # if adapter gets unplugged while on this screen, go back
+        if not _tplink_connected():
+            return "cycle", None
+
+        img, d = new_frame(bg=R["bg"])
         for y in range(0, H, 4):
             d.line([(0, y), (W, y)], fill=(18, 0, 0))
 
