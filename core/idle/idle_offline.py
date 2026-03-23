@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
 BearBox Idle — Offline Mode
-Red clock + OFFLINE screen, silent AP in background.
-Checks for internet every 10 seconds.
-When internet detected → plays CONNECTED screen → restarts service.
+3 screens cycling on tap:
+  0. Red Clock
+  1. OFFLINE screen
+  2. Saved Networks (tap network to connect, tap outside to go back)
+
+Silent AP in background for SSH access.
+Checks internet every 10 seconds.
 """
 
 import os
@@ -15,8 +19,9 @@ import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from clock_offline import draw as draw_clock
-from hello_offline import draw as draw_offline
+from clock_offline   import draw as draw_clock
+from hello_offline   import draw as draw_offline
+from networks_offline import run as run_networks
 
 AP_IFACE = "wlan0"
 AP_IP    = "10.0.0.1"
@@ -89,24 +94,41 @@ def _check_tap():
         _touch_fd = None
     return False
 
-SCREENS     = [("clock", draw_clock), ("offline", draw_offline)]
-CHECK_EVERY = 10  # check internet every 10 seconds
+CHECK_EVERY = 10
 
 def run():
     threading.Thread(target=_setup_ap, daemon=True).start()
 
-    current    = 0
-    last_check = time.time()
+    # screens 0 and 1 are simple draw loops
+    # screen 2 is the networks screen (has its own loop)
+    DRAW_SCREENS = [draw_clock, draw_offline]
+    current      = 0       # 0=clock, 1=offline, 2=networks
+    last_check   = time.time()
 
     print(f"Offline mode | AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
 
     try:
         while True:
-            SCREENS[current][1]()
 
-            if _check_tap():
-                current = (current + 1) % len(SCREENS)
-                print(f">> Switched to: {SCREENS[current][0]}")
+            if current == 2:
+                # networks screen has its own loop
+                result, ssid = run_networks()
+                if result == "connected":
+                    print(f">> Connected to {ssid}!")
+                    _teardown_ap()
+                    from screen_connected import run as play_connected
+                    play_connected()
+                    subprocess.run("sudo systemctl restart bearbox", shell=True)
+                    return
+                else:
+                    # tapped outside — go back to clock
+                    current = 0
+                    continue
+            else:
+                DRAW_SCREENS[current]()
+                if _check_tap():
+                    current = (current + 1) % 3
+                    print(f">> Screen: {['clock','offline','networks'][current]}")
 
             # check internet periodically
             if time.time() - last_check > CHECK_EVERY:
@@ -114,14 +136,13 @@ def run():
                 if _is_connected():
                     print(">> Internet detected!")
                     _teardown_ap()
-                    # play connected screen
                     from screen_connected import run as play_connected
                     play_connected()
-                    # restart service to boot normally
                     subprocess.run("sudo systemctl restart bearbox", shell=True)
                     return
 
             time.sleep(1/30)
+
     finally:
         _teardown_ap()
 

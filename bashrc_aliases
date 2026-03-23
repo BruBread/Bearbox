@@ -27,3 +27,4 @@ alias bbwifi='f() {
     echo "Connected: $(iwgetid -r)"
     echo "IP: $(hostname -I)"
 }; f'
+alias bbsave='f() { read -p "SSID: " S; read -p "Password (blank=open): " P; python3 -c "import json; c=json.load(open(\"~/bearbox/config.json\")); c.setdefault(\"saved_networks\",{})[\"$S\"]=\"$P\"; json.dump(c,open(\"~/bearbox/config.json\",\"w\"),indent=4)"; echo "Saved $S!"; }; f'
