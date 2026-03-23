@@ -2,8 +2,8 @@
 """
 BearBox Offline — Saved Networks Screen
 Shows adapter screen first if TL-WN722N not plugged in.
-Then shows saved networks as tappable buttons.
 Uses wlan1 for connecting while wlan0 stays as AP.
+Returns ("connected", ssid), ("cycle", None)
 """
 
 import os
@@ -129,15 +129,14 @@ def _draw_connecting(ssid):
         time.sleep(1/15)
 
 def run():
-    """
-    Shows adapter screen if needed, then saved networks.
-    Returns ("connected", ssid) or ("cycle", None)
-    """
-    # check if adapter is plugged in before showing networks
+    """Returns ("connected", ssid) or ("cycle", None)"""
+
+    # check adapter — show adapter screen if needed
     if not _tplink_connected():
         from screen_plug_adapter import run as wait_adapter
         result = wait_adapter()
-        # user tapped back or adapter not connected
+        if result == "connected":
+            return "connected", "auto"   # internet came back while waiting
         if result == "back" or not _tplink_connected():
             return "cycle", None
 
@@ -167,7 +166,7 @@ def run():
     while True:
         pulse += 1
 
-        # if adapter gets unplugged while on this screen, go back
+        # adapter unplugged while on this screen — go back
         if not _tplink_connected():
             return "cycle", None
 
@@ -210,7 +209,7 @@ def run():
 
         # footer
         d.rectangle([0, H-22, W, H], fill=R["panel"])
-        hint = f"AP: BearBox-AP  •  SSH: bearbox@10.0.0.1"
+        hint = "AP: BearBox-AP  •  SSH: bearbox@10.0.0.1"
         hw   = Fs.getbbox(hint)[2]
         d.text(((W-hw)//2, H-14), hint, font=Fs, fill=R["dimred"])
 

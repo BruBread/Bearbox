@@ -3,7 +3,8 @@
 BearBox — Plug In Adapter Screen (Offline)
 Waits for TL-WN722N to be plugged in.
 Tap anywhere to go back.
-Returns: "detected" or "back"
+Also watches for internet coming back.
+Returns: "detected", "back", or "connected"
 """
 
 import os
@@ -60,6 +61,10 @@ def _tplink_connected():
     out = subprocess.run("lsusb", shell=True, capture_output=True, text=True).stdout
     return "2357:010c" in out or "TP-Link" in out
 
+def _is_connected():
+    r = subprocess.run("ping -c 1 -W 1 8.8.8.8", shell=True, capture_output=True)
+    return r.returncode == 0
+
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 0.8
 _touch_fd    = None
@@ -88,10 +93,7 @@ def _check_tap():
     return False
 
 def run():
-    """
-    Wait for adapter or tap to go back.
-    Returns "detected" or "back"
-    """
+    """Returns 'detected', 'back', or 'connected'"""
     if _tplink_connected():
         return "detected"
 
@@ -101,19 +103,25 @@ def run():
     Fbg    = font(10)
     cols   = [_BgCol(int((i+0.5)*W/16)) for i in range(16)]
     pulse  = 0
+    last_inet_check = time.time()
 
     while True:
         pulse += 1
 
+        # check internet every 5 seconds
+        if time.time() - last_inet_check > 5:
+            last_inet_check = time.time()
+            if _is_connected():
+                return "connected"
+
         # adapter plugged in
         if _tplink_connected():
-            # brief flash
             img, d = new_frame(bg=R["bg"])
             for y in range(0, H, 4):
                 d.line([(0, y), (W, y)], fill=(18, 0, 0))
+            F2   = font(20, bold=True)
             msg  = "ADAPTER DETECTED"
             msg2 = "starting up..."
-            F2   = font(20, bold=True)
             mw   = F2.getbbox(msg)[2]
             mw2  = Fs.getbbox(msg2)[2]
             d.text(((W-mw)//2,  H//2-20), msg,  font=F2, fill=R["red"])
@@ -128,11 +136,9 @@ def run():
 
         img, d = new_frame(bg=R["bg"])
 
-        # scanlines
         for y in range(0, H, 4):
             d.line([(0, y), (W, y)], fill=(18, 0, 0))
 
-        # bg noise
         for col in cols:
             col.update()
             col.draw(d, Fbg)
@@ -154,7 +160,6 @@ def run():
         sub_w = Fs.getbbox("TL-WN722N")[2]
         d.text((bx+(bw-sub_w)//2, by+30), "TL-WN722N", font=Fs, fill=R["dimwhite"])
 
-        # message
         for i, (msg, col) in enumerate([
             ("No adapter detected.",          R["white"]),
             ("Plug in your TL-WN722N",        R["dimwhite"]),
@@ -163,13 +168,12 @@ def run():
             mw = Fs.getbbox(msg)[2]
             d.text(((W-mw)//2, 146 + i*20), msg, font=Fs, fill=col)
 
-        # waiting dots
         dots  = "." * (1 + (pulse // 10) % 3)
         label = f"Waiting{dots}"
         lw    = Fb.getbbox(label)[2]
         d.text(((W-lw)//2, 220), label, font=Fb, fill=R["dimred"])
 
-        # back button at bottom
+        # back hint
         back_label = "TAP ANYWHERE TO GO BACK"
         bw2        = Fs.getbbox(back_label)[2]
         d.rectangle([0, H-28, W, H], fill=R["panel"])
