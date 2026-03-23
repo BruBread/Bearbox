@@ -9,3 +9,21 @@ alias bbedit='cd ~/bearbox'
 alias bbhelp='echo "bbclock bbinstall bbupdate bbstatus bbrestart bblogs bbedit bbhelp"'
 alias bbreset='sudo rm -rf ~/bearbox && sudo rm -f /etc/systemd/system/bearbox.service && sudo rm -f /etc/udev/rules.d/99-bearbox.rules && sudo systemctl daemon-reload && sed -i "/bearbox/d" ~/.bashrc && echo "BearBox wiped! Clone repo and run install.sh to reinstall."'
 alias bbgo='sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 /home/bearbox/bearbox/core/profile_manager.py'
+alias bbwifi='f() {
+    read -p "SSID: " SSID
+    read -p "Password (leave blank if open): " PASS
+    if [ -z "$PASS" ]; then
+        NETBLOCK="ssid=\"$SSID\"\n    key_mgmt=NONE"
+    else
+        NETBLOCK="ssid=\"$SSID\"\n    psk=\"$PASS\""
+    fi
+    printf "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\nupdate_config=1\nnetwork={\n    $NETBLOCK\n}\n" > /tmp/bb_connect.conf
+    sudo pkill wpa_supplicant 2>/dev/null
+    sleep 1
+    sudo wpa_supplicant -B -i wlan0 -c /tmp/bb_connect.conf
+    sleep 3
+    sudo dhcpcd wlan0 2>/dev/null || sudo dhclient wlan0 2>/dev/null
+    sleep 2
+    echo "Connected: $(iwgetid -r)"
+    echo "IP: $(hostname -I)"
+}; f'
