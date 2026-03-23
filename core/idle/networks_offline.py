@@ -136,9 +136,9 @@ def run():
     # check if adapter is plugged in before showing networks
     if not _tplink_connected():
         from screen_plug_adapter import run as wait_adapter
-        wait_adapter()
-        # if user somehow exits without adapter, cycle back
-        if not _tplink_connected():
+        result = wait_adapter()
+        # user tapped back or adapter not connected
+        if result == "back" or not _tplink_connected():
             return "cycle", None
 
     F      = font(16, bold=True)

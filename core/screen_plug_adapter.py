@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 BearBox — Plug In Adapter Screen (Offline)
-Shows when no internet and asks user to plug in TL-WN722N.
-Red color scheme matching offline mode.
-Returns when adapter is detected.
+Waits for TL-WN722N to be plugged in.
+Tap anywhere to go back.
+Returns: "detected" or "back"
 """
 
 import os
@@ -11,6 +11,8 @@ import sys
 import time
 import random
 import string
+import select
+import struct
 import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -49,7 +51,8 @@ class _BgCol:
         for c in self.chars:
             y = int(c["y"])
             if 0 <= y <= H:
-                frac = 1 - (list(self.chars).index(c) / max(len(self.chars)-1, 1))
+                idx  = self.chars.index(c)
+                frac = 1 - (idx / max(len(self.chars)-1, 1))
                 b    = int(frac * 45)
                 d.text((self.x, y), c["char"], font=fnt, fill=(b, 0, 0))
 
@@ -57,10 +60,40 @@ def _tplink_connected():
     out = subprocess.run("lsusb", shell=True, capture_output=True, text=True).stdout
     return "2357:010c" in out or "TP-Link" in out
 
+TOUCH_DEV    = "/dev/input/event0"
+TAP_COOLDOWN = 0.8
+_touch_fd    = None
+_last_tap    = 0
+
+def _check_tap():
+    global _touch_fd, _last_tap
+    if not os.path.exists(TOUCH_DEV):
+        return False
+    try:
+        if _touch_fd is None:
+            _touch_fd = open(TOUCH_DEV, "rb")
+        r, _, _ = select.select([_touch_fd], [], [], 0)
+        if r:
+            while True:
+                r2, _, _ = select.select([_touch_fd], [], [], 0)
+                if not r2:
+                    break
+                _touch_fd.read(16)
+            now = time.time()
+            if now - _last_tap > TAP_COOLDOWN:
+                _last_tap = now
+                return True
+    except:
+        _touch_fd = None
+    return False
+
 def run():
-    """Wait for TL-WN722N. Returns when detected."""
+    """
+    Wait for adapter or tap to go back.
+    Returns "detected" or "back"
+    """
     if _tplink_connected():
-        return
+        return "detected"
 
     F      = font(22, bold=True)
     Fb     = font(16, bold=True)
@@ -69,8 +102,30 @@ def run():
     cols   = [_BgCol(int((i+0.5)*W/16)) for i in range(16)]
     pulse  = 0
 
-    while not _tplink_connected():
+    while True:
         pulse += 1
+
+        # adapter plugged in
+        if _tplink_connected():
+            # brief flash
+            img, d = new_frame(bg=R["bg"])
+            for y in range(0, H, 4):
+                d.line([(0, y), (W, y)], fill=(18, 0, 0))
+            msg  = "ADAPTER DETECTED"
+            msg2 = "starting up..."
+            F2   = font(20, bold=True)
+            mw   = F2.getbbox(msg)[2]
+            mw2  = Fs.getbbox(msg2)[2]
+            d.text(((W-mw)//2,  H//2-20), msg,  font=F2, fill=R["red"])
+            d.text(((W-mw2)//2, H//2+14), msg2, font=Fs, fill=R["dimwhite"])
+            push(img)
+            time.sleep(1.5)
+            return "detected"
+
+        # tap to go back
+        if _check_tap():
+            return "back"
+
         img, d = new_frame(bg=R["bg"])
 
         # scanlines
@@ -89,55 +144,37 @@ def run():
         tw    = F.getbbox(title)[2]
         d.text(((W-tw)//2, 12), title, font=F, fill=R["red"])
 
-        # pulsing USB icon area
+        # pulsing USB box
         amp   = abs((pulse % 50) - 25) / 25.0
         col_p = (int(80 + amp * 175), 0, 0)
-        bx, by, bw, bh = W//2 - 45, 68, 90, 60
+        bx, by, bw, bh = W//2-45, 66, 90, 60
         d.rectangle([bx, by, bx+bw, by+bh], fill=R["panel"], outline=col_p)
         usb_w = Fb.getbbox("USB")[2]
-        d.text((bx + (bw-usb_w)//2, by+8), "USB", font=Fb, fill=col_p)
+        d.text((bx+(bw-usb_w)//2, by+8),  "USB",       font=Fb, fill=col_p)
         sub_w = Fs.getbbox("TL-WN722N")[2]
-        d.text((bx + (bw-sub_w)//2, by+30), "TL-WN722N", font=Fs, fill=R["dimwhite"])
+        d.text((bx+(bw-sub_w)//2, by+30), "TL-WN722N", font=Fs, fill=R["dimwhite"])
 
         # message
-        msgs = [
-            "No internet detected.",
-            "Plug in your TL-WN722N",
-            "to enable WiFi & SSH access.",
-        ]
-        for i, msg in enumerate(msgs):
+        for i, (msg, col) in enumerate([
+            ("No adapter detected.",          R["white"]),
+            ("Plug in your TL-WN722N",        R["dimwhite"]),
+            ("to connect to saved networks.", R["dimwhite"]),
+        ]):
             mw = Fs.getbbox(msg)[2]
-            col_m = R["white"] if i == 0 else R["dimwhite"]
-            d.text(((W-mw)//2, 148 + i*20), msg, font=Fs, fill=col_m)
+            d.text(((W-mw)//2, 146 + i*20), msg, font=Fs, fill=col)
 
-        # animated waiting dots
+        # waiting dots
         dots  = "." * (1 + (pulse // 10) % 3)
         label = f"Waiting{dots}"
         lw    = Fb.getbbox(label)[2]
-        d.text(((W-lw)//2, 224), label, font=Fb, fill=R["dimred"])
+        d.text(((W-lw)//2, 220), label, font=Fb, fill=R["dimred"])
 
-        # footer
-        d.rectangle([0, H-22, W, H], fill=R["panel"])
-        hint = "or reboot to skip"
-        hw   = Fs.getbbox(hint)[2]
-        d.text(((W-hw)//2, H-14), hint, font=Fs, fill=R["darkred"])
+        # back button at bottom
+        back_label = "TAP ANYWHERE TO GO BACK"
+        bw2        = Fs.getbbox(back_label)[2]
+        d.rectangle([0, H-28, W, H], fill=R["panel"])
+        d.line([(0, H-28), (W, H-28)], fill=R["dimred"], width=1)
+        d.text(((W-bw2)//2, H-18), back_label, font=Fs, fill=R["dimred"])
 
         push(img)
         time.sleep(1/10)
-
-    # adapter detected — brief flash
-    F2 = font(20, bold=True)
-    img, d = new_frame(bg=R["bg"])
-    for y in range(0, H, 4):
-        d.line([(0, y), (W, y)], fill=(18, 0, 0))
-    msg  = "ADAPTER DETECTED"
-    msg2 = "starting up..."
-    mw   = F2.getbbox(msg)[2]
-    mw2  = Fs.getbbox(msg2)[2]
-    d.text(((W-mw)//2,  H//2-20), msg,  font=F2, fill=R["red"])
-    d.text(((W-mw2)//2, H//2+14), msg2, font=Fs, fill=R["dimwhite"])
-    push(img)
-    time.sleep(1.5)
-
-if __name__ == "__main__":
-    run()
