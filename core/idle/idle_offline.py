@@ -109,19 +109,34 @@ SCREENS = [
 ]
 
 def run():
-    # start AP silently in background
     threading.Thread(target=_setup_ap, daemon=True).start()
 
-    current = 0
+    current    = 0
+    last_check = time.time()
+    CHECK_EVERY = 10  # check internet every 10 seconds
+
     print("Offline mode — tap to cycle screens")
-    print(f"AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
 
     try:
         while True:
             SCREENS[current][1]()
+
             if _check_tap():
                 current = (current + 1) % len(SCREENS)
-                print(f">> Switched to: {SCREENS[current][0]}")
+
+            # check if internet came back
+            if time.time() - last_check > CHECK_EVERY:
+                last_check = time.time()
+                result = subprocess.run(
+                    "ping -c 1 -W 2 8.8.8.8",
+                    shell=True, capture_output=True
+                )
+                if result.returncode == 0:
+                    print(">> Internet detected! Restarting BearBox...")
+                    _teardown_ap()
+                    subprocess.run("sudo systemctl restart bearbox", shell=True)
+                    return
+
             time.sleep(1/30)
     finally:
         _teardown_ap()

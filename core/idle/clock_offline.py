@@ -258,7 +258,7 @@ def draw():
         for i, line in enumerate(lines[:2]):
             lw = F["quote"].getbbox(line)[2] - F["quote"].getbbox(line)[0]
             d.text(((W-lw)//2, quote_y + i*QUOTE_LINE),
-                   line, font=F["quote"], fill=R["dimred"])
+                   line, font=F["quote"], fill=R["red"])
         if _tick % 20 < 10:
             last  = lines[min(len(lines)-1, 1)]
             lw    = F["quote"].getbbox(last)[2] - F["quote"].getbbox(last)[0]
