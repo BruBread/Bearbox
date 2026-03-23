@@ -120,7 +120,11 @@ def run():
                     _teardown_ap()
                     from screen_connected import run as play_connected
                     play_connected()
-                    subprocess.run("sudo systemctl restart bearbox", shell=True)
+                    # sync time then go straight to normal idle
+                    from network.net_utils import sync_time
+                    sync_time()
+                    from idle_main import run as run_idle
+                    run_idle()
                     return
 
             # draw screens
