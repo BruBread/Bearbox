@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 BearBox Network — Main Entry Point
-Simple flow:
-  1. Restore saved time
-  2. Try auto-connect to hotspot
-  3. If connected → sync time → return (go to normal idle)
-  4. If not → launch offline mode (red clock + OFFLINE screen + silent AP)
+1. Restore saved time
+2. If already connected → sync time → return
+3. Try auto-connect to hotspot
+4. If connected → sync time → play CONNECTED screen → return
+5. If not → launch offline mode (red clock + AP)
 """
 
 import os
@@ -63,21 +63,24 @@ def _try_hotspot():
 def run():
     _restore_time()
 
+    # already connected — silent sync, no screen
     if is_connected():
         sync_time()
-        return  # → normal idle
+        return
 
-    # try hotspot
+    # try hotspot auto-connect
     if _try_hotspot():
         sync_time()
-        return  # → normal idle
+        # play connected transition screen
+        from screen_connected import run as play_connected
+        play_connected()
+        return
 
-    # offline — launch red offline mode
+    # no internet at all — launch offline mode
     print(">> No internet — launching offline mode")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
     from idle_offline import run as run_offline
     run_offline()
-    # offline mode blocks until connectivity is restored externally
-    # after bbconnect is used via SSH, the service will restart
 
 if __name__ == "__main__":
     run()
