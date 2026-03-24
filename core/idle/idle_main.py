@@ -5,6 +5,8 @@ Runs when no device is plugged in.
 Cycles through idle screens on tap.
 Saves time every 30 seconds.
 Checks internet every 30 seconds — if lost plays DISCONNECTED screen.
+
+Set env BB_SKIP_BOOT_ANIM=1 to skip the boot animation (e.g. returning from keyboard).
 """
 
 import os
@@ -79,9 +81,13 @@ def _check_tap():
 
 # ── main loop ─────────────────────────────────────────────────
 def run():
-    # boot animation
-    from boot_anim import play as play_boot
-    play_boot()
+    skip_boot = os.environ.get("BB_SKIP_BOOT_ANIM") == "1"
+
+    if not skip_boot:
+        from boot_anim import play as play_boot
+        play_boot()
+    else:
+        print(">> Skipping boot animation (returning from profile)")
 
     # network check + time restore
     from network.net_check import run as run_network
@@ -108,10 +114,8 @@ def run():
             last_check = time.time()
             if not _is_connected():
                 print(">> Internet lost!")
-                # play disconnected screen
                 from screen_disconnected import run as play_disconnected
                 play_disconnected()
-                # restart service — will boot into offline mode
                 subprocess.run("sudo systemctl restart bearbox", shell=True)
                 return
 
