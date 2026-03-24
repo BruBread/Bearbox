@@ -55,8 +55,8 @@ def _is_offline_mode():
 def detect_keyboard():
     """
     Returns True if a USB keyboard is connected.
-    Strategy: check /proc/bus/input/devices for any device with EV_KEY
-    that is NOT the touchscreen (event0) and is on a USB bus.
+    Checks /proc/bus/input/devices for any USB device with EV_KEY
+    that is NOT the touchscreen (event0).
     """
     try:
         with open("/proc/bus/input/devices") as f:
@@ -65,18 +65,15 @@ def detect_keyboard():
         for block in content.split("\n\n"):
             if not block.strip():
                 continue
-            # must be USB
             if "usb" not in block.lower() and "USB" not in block:
                 continue
-            # must not be the touchscreen (event0)
             if "event0" in block:
                 continue
-            # must have EV_KEY capability (bit 1 set in EV= bitmask)
             for line in block.split("\n"):
                 if line.strip().startswith("B: EV="):
                     try:
                         val = int(line.split("=")[1].strip(), 16)
-                        if val & (1 << 1):  # EV_KEY bit
+                        if val & (1 << 1):
                             return True
                     except:
                         pass
@@ -118,7 +115,7 @@ def launch_profile(profile: str):
         "games":       f"{BASE}/profiles/games/launcher.py",
         "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
         "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
-        "keyboard":    f"{BASE}/profiles/keyboard/ui.py",
+        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",  # fixed: was ui.py
     }
     script = profile_map.get(profile)
     if not script:
