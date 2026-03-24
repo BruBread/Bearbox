@@ -77,9 +77,6 @@ def detect_keyboard():
                     try:
                         val = int(line.split("=")[1].strip(), 16)
                         if val & (1 << 1):  # EV_KEY bit
-                            # also make sure it has alphabet keys (KEY_A = bit 30)
-                            # check B: KEY= bitmask if present
-                            # for simplicity: if EV_KEY and USB, treat as keyboard
                             return True
                     except:
                         pass
@@ -136,6 +133,10 @@ def launch_profile(profile: str):
         env={**os.environ, "PYTHONPATH": PYTHONPATH}
     )
 
+# Profiles that warrant a "MODULE DISCONNECTED" screen when unplugged.
+# idle and keyboard are excluded — no disconnect screen for those.
+_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky"}
+
 def stop_process(process, name):
     if process is None:
         return
@@ -149,7 +150,9 @@ def stop_process(process, name):
         process.wait()
     except Exception as e:
         print(f"Error stopping {name}: {e}")
-    if was_running:
+
+    # Only show disconnect screen when a real hardware-profile was running
+    if was_running and name in _DISCONNECT_PROFILES:
         try:
             from core.screen_disconnect import run as show_disconnect
             show_disconnect()
