@@ -1,14 +1,22 @@
 # BearBox Shortcuts
-alias bbclock='sudo python3 ~/bearbox/core/idle/clock.py'
-alias bbinstall='cd ~/bearbox && sudo bash install.sh'
-alias bbupdate='cd ~/bearbox && git pull'
+
+# ── Service Control ───────────────────────────────────────────
+alias bbstart='sudo systemctl start bearbox && echo "BearBox started!"'
+alias bbstop='sudo systemctl stop bearbox && echo "BearBox stopped."'
+alias bbrestart='sudo systemctl restart bearbox && echo "BearBox restarted."'
 alias bbstatus='sudo systemctl status bearbox'
-alias bbrestart='sudo systemctl restart bearbox'
 alias bblogs='sudo journalctl -u bearbox -f'
-alias bbedit='cd ~/bearbox'
-alias bbhelp='echo "bbclock bbinstall bbupdate bbstatus bbrestart bblogs bbedit bbhelp"'
-alias bbreset='sudo rm -rf ~/bearbox && sudo rm -f /etc/systemd/system/bearbox.service && sudo rm -f /etc/udev/rules.d/99-bearbox.rules && sudo systemctl daemon-reload && sed -i "/bearbox/d" ~/.bashrc && echo "BearBox wiped! Clone repo and run install.sh to reinstall."'
 alias bbgo='sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 /home/bearbox/bearbox/core/profile_manager.py'
+alias bbshutdown='sudo python3 /home/bearbox/bearbox/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped. Run bbstart to restart."'
+
+# ── Dev / Files ───────────────────────────────────────────────
+alias bbedit='cd ~/bearbox'
+alias bbupdate='cd ~/bearbox && git pull && echo "Done. Run bbrestart to apply."'
+alias bbinstall='cd ~/bearbox && sudo bash install.sh'
+alias bbclock='sudo python3 ~/bearbox/core/idle/clock.py'
+alias bbkb='sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 ~/bearbox/profiles/keyboard/ui.py'
+
+# ── WiFi ──────────────────────────────────────────────────────
 alias bbwifi='f() {
     read -p "SSID: " SSID
     read -p "Password (leave blank if open): " PASS
@@ -24,9 +32,71 @@ alias bbwifi='f() {
     sleep 3
     sudo dhcpcd wlan0 2>/dev/null || sudo dhclient wlan0 2>/dev/null
     sleep 2
-    echo "Connected: $(iwgetid -r)"
+    echo "Connected: $(iwgetid -r 2>/dev/null || echo none)"
     echo "IP: $(hostname -I)"
 }; f'
-alias bbsave='f() { read -p "SSID: " S; read -p "Password (blank=open): " P; python3 -c "import json; c=json.load(open(\"~/bearbox/config.json\")); c.setdefault(\"saved_networks\",{})[\"$S\"]=\"$P\"; json.dump(c,open(\"~/bearbox/config.json\",\"w\"),indent=4)"; echo "Saved $S!"; }; f'
-alias bbshutdown='sudo python3 /home/bearbox/bearbox/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped. Run bbgo to restart."'
-alias bbgo='sudo systemctl start bearbox && echo "BearBox started!"'
+
+alias bbdisconnect='f() {
+    IFACE="${1:-wlan0}"
+    echo "Disconnecting $IFACE..."
+    sudo pkill -f "wpa_supplicant.*$IFACE" 2>/dev/null
+    sudo pkill -f "dhcpcd.*$IFACE" 2>/dev/null
+    sudo pkill -f "dhclient.*$IFACE" 2>/dev/null
+    sleep 1
+    sudo ip addr flush dev "$IFACE" 2>/dev/null
+    sudo ip link set "$IFACE" down 2>/dev/null
+    sudo ip link set "$IFACE" up 2>/dev/null
+    echo "Disconnected. Run bbwifi to reconnect, or bbrestart to let BearBox handle it."
+}; f'
+
+alias bbsave='f() {
+    read -p "SSID: " S
+    read -p "Password (blank=open): " P
+    CONFIG=~/bearbox/config.json
+    python3 -c "
+import json, sys
+path = \"$HOME/bearbox/config.json\"
+try:
+    c = json.load(open(path))
+except:
+    c = {}
+c.setdefault(\"saved_networks\", {})[\"$S\"] = \"$P\"
+json.dump(c, open(path, \"w\"), indent=4)
+print(\"Saved: $S\")
+"
+}; f'
+
+# ── Nuclear Option ────────────────────────────────────────────
+alias bbreset='sudo rm -rf ~/bearbox && sudo rm -f /etc/systemd/system/bearbox.service && sudo rm -f /etc/udev/rules.d/99-bearbox.rules && sudo systemctl daemon-reload && sed -i "/bearbox/d" ~/.bashrc && echo "BearBox wiped! Clone repo and run install.sh to reinstall."'
+
+# ── Help ──────────────────────────────────────────────────────
+alias bbhelp='echo "
+╔══════════════════════════════════════════════════════════╗
+║                   BearBox Commands                       ║
+╠══════════════════════════════════════════════════════════╣
+║  SERVICE CONTROL                                         ║
+║    bbstart       Start the BearBox service               ║
+║    bbstop        Stop the BearBox service                ║
+║    bbrestart     Restart the BearBox service             ║
+║    bbstatus      Show service status                     ║
+║    bblogs        Tail live service logs (Ctrl+C to exit) ║
+║    bbgo          Run BearBox manually (no service)       ║
+║    bbshutdown    Play shutdown anim then stop service    ║
+║                                                          ║
+║  FILES & UPDATES                                         ║
+║    bbedit        cd into ~/bearbox                       ║
+║    bbupdate      git pull latest changes                 ║
+║    bbinstall     Re-run the install script               ║
+║    bbclock       Run the clock screen standalone         ║
+║    bbkb          Run the keyboard terminal standalone    ║
+║                                                          ║
+║  WIFI                                                    ║
+║    bbwifi        Connect to a WiFi network               ║
+║    bbdisconnect  Disconnect from WiFi (pass iface name   ║
+║                  to target wlan1: bbdisconnect wlan1)    ║
+║    bbsave        Save a network to config.json           ║
+║                                                          ║
+║  DANGER ZONE                                             ║
+║    bbreset       Completely wipe BearBox from this Pi    ║
+╚══════════════════════════════════════════════════════════╝
+"'

@@ -8,6 +8,7 @@ Device → Profile:
   TL-WN722N + ethernet    → ap
   USB Drive               → games
   Rubber Ducky            → rubberducky
+  USB Keyboard            → keyboard
   Nothing                 → idle
 """
 
@@ -48,22 +49,61 @@ def eth_connected():
     return run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1"
 
 def _is_offline_mode():
-    """Check if we're currently in offline mode by seeing if AP is running."""
     r = subprocess.run("pgrep -f idle_offline", shell=True, capture_output=True)
     return r.returncode == 0
 
+def detect_keyboard():
+    """
+    Returns True if a USB keyboard is connected.
+    Strategy: check /proc/bus/input/devices for any device with EV_KEY
+    that is NOT the touchscreen (event0) and is on a USB bus.
+    """
+    try:
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+
+        for block in content.split("\n\n"):
+            if not block.strip():
+                continue
+            # must be USB
+            if "usb" not in block.lower() and "USB" not in block:
+                continue
+            # must not be the touchscreen (event0)
+            if "event0" in block:
+                continue
+            # must have EV_KEY capability (bit 1 set in EV= bitmask)
+            for line in block.split("\n"):
+                if line.strip().startswith("B: EV="):
+                    try:
+                        val = int(line.split("=")[1].strip(), 16)
+                        if val & (1 << 1):  # EV_KEY bit
+                            # also make sure it has alphabet keys (KEY_A = bit 30)
+                            # check B: KEY= bitmask if present
+                            # for simplicity: if EV_KEY and USB, treat as keyboard
+                            return True
+                    except:
+                        pass
+    except:
+        pass
+    return False
+
 def get_active_profile():
     devices = get_connected_devices()
+
     for vid_pid, profile in PROFILES.items():
         if vid_pid in devices:
-            # don't switch to pentest if we're in offline mode
             if profile == "pentest" and _is_offline_mode():
-                return None   # stay in idle/offline
+                return None
             if profile == "pentest" and eth_connected():
                 return "ap"
             return profile
+
     if detect_usb_drive():
         return "games"
+
+    if detect_keyboard():
+        return "keyboard"
+
     return None
 
 def launch_idle():
@@ -81,6 +121,7 @@ def launch_profile(profile: str):
         "games":       f"{BASE}/profiles/games/launcher.py",
         "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
         "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
+        "keyboard":    f"{BASE}/profiles/keyboard/ui.py",
     }
     script = profile_map.get(profile)
     if not script:
@@ -131,7 +172,7 @@ def main():
             if detected:
                 current_process = launch_profile(detected)
             else:
-                print("About to launch idle...")  # ADD THIS
+                print("About to launch idle...")
                 current_process = launch_idle()
                 print(f"Idle PID: {current_process.pid if current_process else 'NONE'}")
 
