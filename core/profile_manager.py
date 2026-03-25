@@ -100,13 +100,13 @@ def get_active_profile():
 
     return None
 
-def launch_idle(skip_boot_anim=False):
+def launch_idle():
     script = f"{BASE}/core/idle/idle_main.py"
     print("Launching idle screen")
-    env = {**os.environ, "PYTHONPATH": PYTHONPATH}
-    if skip_boot_anim:
-        env["BB_SKIP_BOOT_ANIM"] = "1"
-    return subprocess.Popen(["python3", script], env=env)
+    return subprocess.Popen(
+        ["python3", script],
+        env={**os.environ, "PYTHONPATH": PYTHONPATH}
+    )
 
 def launch_profile(profile: str):
     profile_map = {
@@ -115,7 +115,7 @@ def launch_profile(profile: str):
         "games":       f"{BASE}/profiles/games/launcher.py",
         "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
         "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
-        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",
+        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",  # fixed: was ui.py
     }
     script = profile_map.get(profile)
     if not script:
@@ -131,8 +131,8 @@ def launch_profile(profile: str):
     )
 
 # Profiles that warrant a "MODULE DISCONNECTED" screen when unplugged.
-# idle is excluded — no disconnect screen for that.
-_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky", "keyboard"}
+# idle and keyboard are excluded — no disconnect screen for those.
+_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky"}
 
 def stop_process(process, name):
     if process is None:
@@ -166,7 +166,6 @@ def main():
         print(f"Detected: {detected}, Current: {current_profile}")
 
         if detected != current_profile:
-            was_profile = current_profile
             stop_process(current_process, current_profile or "idle")
             current_process = None
             current_profile = detected
@@ -174,9 +173,7 @@ def main():
                 current_process = launch_profile(detected)
             else:
                 print("About to launch idle...")
-                # Skip boot anim when returning from keyboard/other profiles
-                skip = was_profile in _DISCONNECT_PROFILES
-                current_process = launch_idle(skip_boot_anim=skip)
+                current_process = launch_idle()
                 print(f"Idle PID: {current_process.pid if current_process else 'NONE'}")
 
         if current_process and current_process.poll() is not None:
@@ -184,7 +181,7 @@ def main():
             if current_profile:
                 current_process = launch_profile(current_profile)
             else:
-                current_process = launch_idle(skip_boot_anim=True)
+                current_process = launch_idle()
 
         time.sleep(2)
 

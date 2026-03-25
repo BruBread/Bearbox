@@ -93,8 +93,14 @@ def run():
         print(">> Skipping boot animation (returning from profile)")
 
     # network check + time restore
-    from network.net_check import run as run_network
-    run_network()
+    # BB_SKIP_NET_CHECK is set when returning from idle_offline after connecting
+    # so we don't re-enter offline mode when there's no internet
+    if os.environ.get("BB_SKIP_NET_CHECK") != "1":
+        from network.net_check import run as run_network
+        run_network()
+    else:
+        print(">> Skipping net_check (already connected)")
+        os.environ.pop("BB_SKIP_NET_CHECK", None)
 
     # start time saver
     threading.Thread(target=_save_time_loop, daemon=True).start()

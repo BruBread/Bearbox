@@ -34,8 +34,20 @@ def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
 def _is_connected():
-    r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
-    return r.returncode == 0
+    """
+    Returns True if wlan0 has an external IP — i.e. joined a real network,
+    not just hosting our own AP (10.0.0.1) or a link-local (169.254.x.x).
+    """
+    result = subprocess.run(
+        "ip -4 addr show wlan0", shell=True, capture_output=True, text=True
+    ).stdout
+    for line in result.splitlines():
+        line = line.strip()
+        if line.startswith("inet "):
+            ip = line.split()[1].split("/")[0]
+            if ip != AP_IP and not ip.startswith("169.254"):
+                return True
+    return False
 
 def _setup_ap():
     """Start AP on wlan0 silently."""
@@ -116,13 +128,19 @@ def run():
             if time.time() - last_inet > CHECK_EVERY:
                 last_inet = time.time()
                 if _is_connected():
-                    print(">> Internet detected!")
+                    print(">> Network detected!")
                     _teardown_ap()
                     from screen_connected import run as play_connected
                     play_connected()
-                    # sync time then go straight to normal idle
-                    from network.net_utils import sync_time
-                    sync_time()
+                    try:
+                        from network.net_utils import has_internet, sync_time
+                        if has_internet():
+                            sync_time()
+                    except Exception:
+                        pass
+                    # set flag so idle_main skips net_check (we're already connected)
+                    os.environ["BB_SKIP_BOOT_ANIM"] = "1"
+                    os.environ["BB_SKIP_NET_CHECK"] = "1"
                     from idle_main import run as run_idle
                     run_idle()
                     return
