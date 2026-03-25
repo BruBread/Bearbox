@@ -44,6 +44,26 @@ def run_cmd(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
 def is_connected():
+    """
+    Returns True if we have a routable IP on any wireless interface.
+    Does NOT require internet — works in local-only / hotspot environments.
+    Falls back to an internet ping only if no local IP is found, so that
+    the connected/offline split still works on fully offline devices.
+    """
+    iface = get_interface()
+    # Check for an assigned IP on the active wireless interface
+    result = run_cmd(f"ip -4 addr show {iface} 2>/dev/null")
+    if "inet " in result:
+        return True
+    # Fallback: try any wlan interface
+    for iface_name in ["wlan0", "wlan1"]:
+        result = run_cmd(f"ip -4 addr show {iface_name} 2>/dev/null")
+        if "inet " in result:
+            return True
+    return False
+
+def has_internet():
+    """Separate check for actual internet access (ping 8.8.8.8)."""
     r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
     return r.returncode == 0
 

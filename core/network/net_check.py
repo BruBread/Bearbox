@@ -14,7 +14,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
-from network.net_utils import is_connected, sync_time, run_cmd, get_interface, load_config
+from network.net_utils import is_connected, has_internet, sync_time, run_cmd, get_interface, load_config
 
 TIME_FILE = "/home/bearbox/bearbox/.last_time"
 
@@ -64,23 +64,23 @@ def _try_hotspot():
 def run():
     _restore_time()
 
-    # already connected — silent sync, no screen
+    # already connected (has IP) — try to sync time if internet available
     if is_connected():
-        sync_time()
+        if has_internet():
+            sync_time()
         return
 
     # try hotspot auto-connect
     if _try_hotspot():
-        sync_time()
+        if has_internet():
+            sync_time()
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
         from screen_connected import run as play_connected
         play_connected()
         return
 
-    # not connected — go straight to offline mode
-    # AP starts automatically, clock shows immediately
-    # adapter screen only appears when user taps to saved networks
-    print(">> No internet — launching offline mode")
+    # not connected at all — go to offline mode
+    print(">> No network connection — launching offline mode")
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
     from idle_offline import run as run_offline
     run_offline()

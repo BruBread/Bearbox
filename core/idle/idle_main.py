@@ -48,8 +48,11 @@ def _save_time_loop():
 CHECK_EVERY = 30  # seconds between internet checks
 
 def _is_connected():
-    r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
-    return r.returncode == 0
+    # Use the network utils check — has IP on wlan = connected.
+    # This prevents falsely going offline in no-internet environments.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    from network.net_utils import is_connected
+    return is_connected()
 
 # ── touch ─────────────────────────────────────────────────────
 TOUCH_DEV    = "/dev/input/event0"
