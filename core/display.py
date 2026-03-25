@@ -111,9 +111,29 @@ def new_frame(bg=None):
     draw = ImageDraw.Draw(img)
     return img, draw
 
+# ─────────────────────────────────────────────────────────────
+# ROTATION
+# ─────────────────────────────────────────────────────────────
+_ROTATE_FILE = "/home/bearbox/bearbox/.rotate"
+
+def get_rotation():
+    """Returns current rotation: 0 or 180."""
+    try:
+        with open(_ROTATE_FILE) as f:
+            return int(f.read().strip())
+    except:
+        return 180  # default
+
+def set_rotation(degrees):
+    """Save rotation setting (0 or 180)."""
+    with open(_ROTATE_FILE, "w") as f:
+        f.write(str(degrees))
+
 def push(img):
     """Write a PIL Image directly to the framebuffer as RGB565."""
-    img = img.rotate(180)
+    rot = get_rotation()
+    if rot:
+        img = img.rotate(rot)
     rgb    = img.convert("RGB")
     arr    = np.array(rgb, dtype=np.uint16)
     r      = (arr[:, :, 0] >> 3).astype(np.uint16)

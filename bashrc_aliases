@@ -66,6 +66,19 @@ print(\"Saved: $S\")
 "
 }; f'
 
+# ── Display ───────────────────────────────────────────────────
+alias bbrotate='f() {
+    ROTATE_FILE="/home/bearbox/bearbox/.rotate"
+    current=$(cat "$ROTATE_FILE" 2>/dev/null || echo "180")
+    if [ "$current" = "180" ]; then
+        echo "0" > "$ROTATE_FILE"
+        echo "Rotation set to 0° (normal). Run bbrestart to apply."
+    else
+        echo "180" > "$ROTATE_FILE"
+        echo "Rotation set to 180° (flipped). Run bbrestart to apply."
+    fi
+}; f'
+
 # ── Nuclear Option ────────────────────────────────────────────
 alias bbreset='sudo rm -rf ~/bearbox && sudo rm -f /etc/systemd/system/bearbox.service && sudo rm -f /etc/udev/rules.d/99-bearbox.rules && sudo systemctl daemon-reload && sed -i "/bearbox/d" ~/.bashrc && echo "BearBox wiped! Clone repo and run install.sh to reinstall."'
 
@@ -88,6 +101,7 @@ alias bbhelp='echo "
 ║    bbupdate      git pull latest changes                 ║
 ║    bbinstall     Re-run the install script               ║
 ║    bbclock       Run the clock screen standalone         ║
+║    bbrotate      Toggle 180° screen flip                  ║
 ║    bbkb          Run the keyboard terminal standalone    ║
 ║                                                          ║
 ║  WIFI                                                    ║
