@@ -121,11 +121,15 @@ def run():
         # check internet periodically
         if time.time() - last_check > CHECK_EVERY:
             last_check = time.time()
-            if not _is_connected():
+            from network.net_utils import has_internet
+            if not has_internet():
                 print(">> Internet lost!")
                 from screen_disconnected import run as play_disconnected
                 play_disconnected()
-                subprocess.run("sudo systemctl restart bearbox", shell=True)
+                # go straight to offline mode — no boot animation
+                sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
+                from idle_offline import run as run_offline
+                run_offline()
                 return
 
         time.sleep(1/30)
