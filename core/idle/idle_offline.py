@@ -132,17 +132,20 @@ def run():
                     _teardown_ap()
                     from screen_connected import run as play_connected
                     play_connected()
+                    # skip net_check — we already know we're connected
+                    # just sync time if internet is available, then go idle
                     try:
                         from network.net_utils import has_internet, sync_time
                         if has_internet():
                             sync_time()
                     except Exception:
                         pass
-                    # set flag so idle_main skips net_check (we're already connected)
-                    os.environ["BB_SKIP_BOOT_ANIM"] = "1"
-                    os.environ["BB_SKIP_NET_CHECK"] = "1"
-                    from idle_main import run as run_idle
-                    run_idle()
+                    import os
+                    env = {**__import__("os").environ, "BB_SKIP_BOOT_ANIM": "1"}
+                    __import__("subprocess").Popen(
+                        ["python3", "/home/bearbox/bearbox/core/idle/idle_main.py"],
+                        env=env
+                    )
                     return
 
             # draw screens
