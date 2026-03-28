@@ -6,7 +6,15 @@ Cycles through idle screens on tap.
 Saves time every 30 seconds.
 Checks internet every 30 seconds — if lost plays DISCONNECTED screen.
 
-Set env BB_SKIP_BOOT_ANIM=1 to skip the boot animation (e.g. returning from keyboard).
+Boot sequence (first run only):
+  - boot animation and net_check run concurrently in separate threads
+  - a threading.Event signals the animation to exit early the moment
+    net_check knows the result, cutting boot time significantly
+  - animation always plays for at least MIN_DURATION seconds so it
+    never just flickers on and off
+
+Set env BB_SKIP_BOOT_ANIM=1 to skip the animation (e.g. returning from
+a keyboard profile).  net_check still runs in that case.
 """
 
 import os
@@ -45,12 +53,9 @@ def _save_time_loop():
         time.sleep(SAVE_EVERY)
 
 # ── internet check ────────────────────────────────────────────
-CHECK_EVERY = 30  # seconds between internet checks
+CHECK_EVERY = 30  # seconds between periodic internet checks
 
 def _is_connected():
-    # Use the network utils check — has IP on wlan = connected.
-    # This prevents falsely going offline in no-internet environments.
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     from network.net_utils import is_connected
     return is_connected()
 
@@ -78,31 +83,67 @@ def _check_tap():
             if now - _last_tap > TAP_COOLDOWN:
                 _last_tap = now
                 return True
-    except:
+    except Exception:
         _touch_fd = None
     return False
 
-# ── main loop ─────────────────────────────────────────────────
-def run():
+# ── boot sequence ─────────────────────────────────────────────
+
+def _run_boot():
+    """
+    Run boot animation and net_check concurrently.
+
+    The animation accepts a threading.Event and will exit early (with a
+    quick fade) once the event is set.  net_check sets it the moment it
+    knows the network outcome.
+
+    If BB_SKIP_BOOT_ANIM is set we still run net_check, just without
+    the animation thread.
+    """
     skip_boot = os.environ.get("BB_SKIP_BOOT_ANIM") == "1"
 
-    if not skip_boot:
-        from boot_anim import play as play_boot
-        play_boot()
-    else:
-        print(">> Skipping boot animation (returning from profile)")
-
-    # network check + time restore
-    # BB_SKIP_NET_CHECK is set when returning from idle_offline after connecting
-    # so we don't re-enter offline mode when there's no internet
-    if os.environ.get("BB_SKIP_NET_CHECK") != "1":
-        from network.net_check import run as run_network
-        run_network()
-    else:
+    # BB_SKIP_NET_CHECK is set when returning from idle_offline after
+    # reconnecting so we don't immediately go offline again.
+    skip_net = os.environ.get("BB_SKIP_NET_CHECK") == "1"
+    if skip_net:
         print(">> Skipping net_check (already connected)")
         os.environ.pop("BB_SKIP_NET_CHECK", None)
 
-    # start time saver
+    if skip_boot:
+        print(">> Skipping boot animation (returning from profile)")
+        if not skip_net:
+            from network.net_check import run as run_network
+            run_network()
+        return
+
+    # Both animation and net_check will run — link them with an event.
+    done_event = threading.Event()
+
+    def _net_thread():
+        if skip_net:
+            done_event.set()
+            return
+        from network.net_check import run as run_network
+        run_network(done_event)
+
+    net_t = threading.Thread(target=_net_thread, daemon=True)
+    net_t.start()
+
+    # Boot animation runs on the main thread so it owns the display.
+    # It exits early once done_event is set (and MIN_DURATION has passed).
+    from boot_anim import play as play_boot
+    play_boot(done_event)
+
+    # Wait for net_check to fully finish before we proceed
+    # (it may still be showing the CONNECTED screen, etc.)
+    net_t.join()
+
+# ── main loop ─────────────────────────────────────────────────
+
+def run():
+    _run_boot()
+
+    # Start background time saver
     threading.Thread(target=_save_time_loop, daemon=True).start()
     print(">> Time saver started")
 
@@ -118,21 +159,26 @@ def run():
             current = (current + 1) % len(SCREENS)
             print(f">> Switched to: {SCREENS[current][0]}")
 
-        # check internet periodically
+        # Periodic internet check
         if time.time() - last_check > CHECK_EVERY:
             last_check = time.time()
             from network.net_utils import has_internet
             if not has_internet():
-                print(">> Internet lost!")
+                print(">> Internet lost — going offline")
                 from screen_disconnected import run as play_disconnected
                 play_disconnected()
-                # go straight to offline mode — no boot animation
-                sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
-                from idle_offline import run as run_offline
-                run_offline()
+                # Hand off to offline mode via subprocess so we don't grow
+                # the call stack on every reconnect/disconnect cycle.
+                os.execv(
+                    sys.executable,
+                    [sys.executable,
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_offline.py")]
+                )
+                # execv replaces this process — code below never runs
                 return
 
-        time.sleep(1/30)
+        time.sleep(1 / 30)
+
 
 if __name__ == "__main__":
     run()

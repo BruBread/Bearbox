@@ -3,6 +3,10 @@
 BearBox — Boot Animation
 Matrix rain gradually resolves into BEARBOX text.
 Runs once on startup then hands off to idle_main.
+
+play() accepts an optional threading.Event — if set, the animation
+exits early so the boot sequence can move on the moment net_check
+finishes rather than waiting the full DURATION.
 """
 
 import time
@@ -10,6 +14,7 @@ import os
 import sys
 import random
 import string
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, C, W, H
@@ -17,17 +22,18 @@ from display import new_frame, push, font, C, W, H
 # ─────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────
-DURATION      = 5.0    # total animation seconds
-HOLD_START    = 0.65   # when BEARBOX is fully revealed — holds here
-HOLD_END      = 0.85   # when fade out begins
-LOGO_TEXT     = "BEARBOX"
-LOGO_SIZE     = 72
-TAGLINE       = "hot-swappable pi by FD"
-TAGLINE_SIZE  = 14
-TAGLINE_OFFSET = 24    # pixels below logo ← increase to move lower
-COL_COUNT     = 32
-CHAR_SIZE     = 14
-RESOLVE_START = 0.25   # when logo starts resolving
+DURATION       = 5.0    # max animation seconds (cut short if net_check finishes)
+MIN_DURATION   = 1.0    # always show at least this long regardless of net result
+HOLD_START     = 0.65   # when BEARBOX is fully revealed — holds here
+HOLD_END       = 0.85   # when fade out begins
+LOGO_TEXT      = "BEARBOX"
+LOGO_SIZE      = 72
+TAGLINE        = "hot-swappable pi by FD"
+TAGLINE_SIZE   = 14
+TAGLINE_OFFSET = 24     # pixels below logo
+COL_COUNT      = 32
+CHAR_SIZE      = 14
+RESOLVE_START  = 0.25   # when logo starts resolving
 
 # ─────────────────────────────────────────────────────────────
 # FONTS
@@ -100,7 +106,6 @@ def _draw_logo(d, F, reveal_pct, alpha_mult=1.0):
     x, y, lw, lh = _logo_pos(F)
 
     for i, letter in enumerate(LOGO_TEXT):
-        # stagger each letter's reveal
         letter_pct = (reveal_pct - (i / len(LOGO_TEXT)) * 0.4) * 2.5
         letter_pct = max(0.0, min(1.0, letter_pct))
 
@@ -111,28 +116,25 @@ def _draw_logo(d, F, reveal_pct, alpha_mult=1.0):
         else:
             display_char = random.choice(_CHARS)
 
-        # x position
         prefix = LOGO_TEXT[:i]
         px = F["logo"].getbbox(prefix)[2] - F["logo"].getbbox(prefix)[0] if prefix else 0
 
-        # color
         if display_char == letter and letter_pct > 0.8:
-            a = int(255 * alpha_mult)
+            a   = int(255 * alpha_mult)
             col = (0, int(180 * alpha_mult), a) if i % 2 == 0 else (a, a, a)
         else:
-            b = int(200 * alpha_mult)
+            b   = int(200 * alpha_mult)
             col = (0, b, int(b * 0.4))
 
         d.text((x + px, y), display_char, font=F["logo"], fill=col)
 
-    # tagline — lower position using TAGLINE_OFFSET
     if reveal_pct > 0.6:
         tag_alpha = min(1.0, (reveal_pct - 0.6) / 0.4) * alpha_mult
         ta        = int(tag_alpha * 180)
         tag_bbox  = F["tagline"].getbbox(TAGLINE)
         tag_w     = tag_bbox[2] - tag_bbox[0]
         tag_x     = (W - tag_w) // 2
-        tag_y     = y + lh + TAGLINE_OFFSET    # ← controlled by config
+        tag_y     = y + lh + TAGLINE_OFFSET
         d.text((tag_x, tag_y), TAGLINE, font=F["tagline"],
                fill=(int(ta * 0.4), int(ta * 0.7), ta))
         d.line([(tag_x, tag_y + TAGLINE_SIZE + 3),
@@ -140,11 +142,44 @@ def _draw_logo(d, F, reveal_pct, alpha_mult=1.0):
                fill=(0, int(ta * 0.4), int(ta * 0.6)), width=1)
 
 # ─────────────────────────────────────────────────────────────
-# MAIN — only runs once, no loop issues
+# FAST FADE-OUT — plays when net_check finishes early
 # ─────────────────────────────────────────────────────────────
-_played = False   # guard so it never plays twice
 
-def play():
+def _fast_fadeout(cols, F, reveal_pct, fade_secs=0.35):
+    """Quickly fade everything to black over fade_secs."""
+    start = time.time()
+    while True:
+        elapsed = time.time() - start
+        if elapsed >= fade_secs:
+            break
+        alpha_mult = max(0.0, 1.0 - elapsed / fade_secs)
+
+        for col in cols:
+            col.update()
+
+        img, d = new_frame(bg=(0, 0, 0))
+        for col in cols:
+            col.draw(d, F, alpha_mult=alpha_mult * 0.2)
+        _draw_logo(d, F, reveal_pct, alpha_mult=alpha_mult)
+        push(img)
+        time.sleep(1 / 30)
+
+    img, _ = new_frame(bg=(0, 0, 0))
+    push(img)
+
+# ─────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────
+_played = False  # guard so it never plays twice
+
+def play(done_event: threading.Event = None):
+    """
+    Play the boot animation.
+
+    done_event: optional threading.Event — when set by net_check, the
+    animation exits early (after MIN_DURATION) with a quick fade-out.
+    If None, plays the full DURATION as before.
+    """
     global _played
     if _played:
         return
@@ -162,19 +197,25 @@ def play():
         if progress >= 1.0:
             break
 
+        # net_check finished — bail early if we've shown the minimum
+        if done_event and done_event.is_set() and elapsed >= MIN_DURATION:
+            reveal_pct = min(1.0, max(0.0,
+                (progress - RESOLVE_START * 0.3) / (HOLD_START - RESOLVE_START * 0.3)
+            ))
+            _fast_fadeout(cols, F, reveal_pct)
+            return
+
         for col in cols:
             col.update()
 
         img, d = new_frame(bg=(0, 0, 0))
 
-        # fade out multiplier
         if progress > HOLD_END:
             alpha_mult = 1.0 - (progress - HOLD_END) / (1.0 - HOLD_END)
             alpha_mult = max(0.0, alpha_mult)
         else:
             alpha_mult = 1.0
 
-        # rain fades as logo resolves, but stays during hold
         if progress > RESOLVE_START and progress < HOLD_START:
             rain_alpha = 1.0 - ((progress - RESOLVE_START) /
                                 (HOLD_START - RESOLVE_START)) * 0.8
@@ -187,16 +228,15 @@ def play():
         for col in cols:
             col.draw(d, F, alpha_mult=rain_alpha)
 
-        # logo
         if progress > RESOLVE_START * 0.3:
             reveal_pct = (progress - RESOLVE_START * 0.3) / (HOLD_START - RESOLVE_START * 0.3)
             reveal_pct = max(0.0, min(1.0, reveal_pct))
             _draw_logo(d, F, reveal_pct, alpha_mult=alpha_mult)
 
         push(img)
-        time.sleep(1/30)
+        time.sleep(1 / 30)
 
-    # clear
+    # natural end — clear to black
     img, _ = new_frame(bg=(0, 0, 0))
     push(img)
     time.sleep(0.1)
