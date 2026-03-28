@@ -1,20 +1,41 @@
 # BearBox Shortcuts
 
+BB=/home/bearbox/bearbox
+PYPATH="$BB/core:$BB"
+
 # ── Service Control ───────────────────────────────────────────
 alias bbstart='sudo systemctl start bearbox && echo "BearBox started!"'
 alias bbstop='sudo systemctl stop bearbox && echo "BearBox stopped."'
 alias bbrestart='sudo systemctl restart bearbox && echo "BearBox restarted."'
 alias bbstatus='sudo systemctl status bearbox'
 alias bblogs='sudo journalctl -u bearbox -f'
-alias bbgo='sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 /home/bearbox/bearbox/core/profile_manager.py'
-alias bbshutdown='sudo python3 /home/bearbox/bearbox/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped. Run bbstart to restart."'
+alias bbshutdown='sudo python3 $BB/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped."'
 
 # ── Dev / Files ───────────────────────────────────────────────
 alias bbedit='cd ~/bearbox'
-alias bbupdate='cd ~/bearbox && git pull && echo "Done. Run bbrestart to apply."'
-alias bbinstall='cd ~/bearbox && sudo bash install.sh'
-alias bbclock='sudo python3 ~/bearbox/core/idle/clock.py'
-alias bbkb='sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox python3 ~/bearbox/profiles/keyboard/ui.py'
+alias bbupdate='cd ~/bearbox && git pull && echo "Done. Restarting..." && sudo systemctl restart bearbox && echo "BearBox restarted."'
+alias bbconfig='nano ~/bearbox/config.json'
+
+alias bbinstall='f() {
+    read -p "Re-run install.sh? This may overwrite config. (y/n): " confirm
+    if [ "$confirm" = "y" ]; then
+        cd ~/bearbox && sudo bash install.sh
+    else
+        echo "Cancelled."
+    fi
+}; f'
+
+# ── Screens ───────────────────────────────────────────────────
+alias bbscreen='f() {
+    case "$1" in
+        clock)    sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/clock.py ;;
+        hello)    sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/hello.py ;;
+        bear)     sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/bear.py ;;
+        offline)  sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/hello_offline.py ;;
+        boot)     sudo env PYTHONPATH=$PYPATH python3 $BB/core/boot_anim.py ;;
+        *)        echo "Usage: bbscreen [clock|hello|bear|offline|boot]" ;;
+    esac
+}; f'
 
 # ── WiFi ──────────────────────────────────────────────────────
 alias bbwifi='f() {
@@ -46,15 +67,14 @@ alias bbdisconnect='f() {
     sudo ip addr flush dev "$IFACE" 2>/dev/null
     sudo ip link set "$IFACE" down 2>/dev/null
     sudo ip link set "$IFACE" up 2>/dev/null
-    echo "Disconnected. Run bbwifi to reconnect, or bbrestart to let BearBox handle it."
+    echo "Disconnected."
 }; f'
 
 alias bbsave='f() {
     read -p "SSID: " S
     read -p "Password (blank=open): " P
-    CONFIG=~/bearbox/config.json
     python3 -c "
-import json, sys
+import json
 path = \"$HOME/bearbox/config.json\"
 try:
     c = json.load(open(path))
@@ -66,49 +86,77 @@ print(\"Saved: $S\")
 "
 }; f'
 
+alias bbip='hostname -I | tr " " "\n" | grep -v "^$"'
+
+alias bbnetwork='f() {
+    SSID=$(iwgetid -r 2>/dev/null || echo "none")
+    IP=$(hostname -I | awk "{print \$1}")
+    ping -c 1 -W 2 8.8.8.8 &>/dev/null && INET="yes" || INET="no"
+    echo "SSID:     $SSID"
+    echo "IP:       $IP"
+    echo "Internet: $INET"
+}; f'
+
 # ── Display ───────────────────────────────────────────────────
 alias bbrotate='f() {
-    ROTATE_FILE="/home/bearbox/bearbox/.rotate"
+    ROTATE_FILE="$BB/.rotate"
     current=$(cat "$ROTATE_FILE" 2>/dev/null || echo "180")
     if [ "$current" = "180" ]; then
         echo "0" > "$ROTATE_FILE"
-        echo "Rotation set to 0° (normal). Run bbrestart to apply."
+        echo "Rotation set to 0°. Run bbrestart to apply."
     else
         echo "180" > "$ROTATE_FILE"
-        echo "Rotation set to 180° (flipped). Run bbrestart to apply."
+        echo "Rotation set to 180°. Run bbrestart to apply."
     fi
 }; f'
 
-# ── Nuclear Option ────────────────────────────────────────────
-alias bbreset='sudo rm -rf ~/bearbox && sudo rm -f /etc/systemd/system/bearbox.service && sudo rm -f /etc/udev/rules.d/99-bearbox.rules && sudo systemctl daemon-reload && sed -i "/bearbox/d" ~/.bashrc && echo "BearBox wiped! Clone repo and run install.sh to reinstall."'
+# ── Danger Zone ───────────────────────────────────────────────
+alias bbreset='f() {
+    echo "WARNING: This will completely wipe BearBox from this Pi."
+    read -p "Type CONFIRM to proceed: " confirm
+    if [ "$confirm" = "CONFIRM" ]; then
+        sudo systemctl stop bearbox 2>/dev/null
+        sudo rm -rf ~/bearbox
+        sudo rm -f /etc/systemd/system/bearbox.service
+        sudo rm -f /etc/udev/rules.d/99-bearbox.rules
+        sudo systemctl daemon-reload
+        sed -i "/bearbox/d" ~/.bashrc
+        echo "BearBox wiped. Clone repo and run install.sh to reinstall."
+    else
+        echo "Cancelled."
+    fi
+}; f'
 
 # ── Help ──────────────────────────────────────────────────────
 alias bbhelp='echo "
 ╔══════════════════════════════════════════════════════════╗
 ║                   BearBox Commands                       ║
 ╠══════════════════════════════════════════════════════════╣
-║  SERVICE CONTROL                                         ║
-║    bbstart       Start the BearBox service               ║
-║    bbstop        Stop the BearBox service                ║
-║    bbrestart     Restart the BearBox service             ║
+║  SERVICE                                                 ║
+║    bbstart       Start the service                       ║
+║    bbstop        Stop the service                        ║
+║    bbrestart     Restart the service                     ║
 ║    bbstatus      Show service status                     ║
-║    bblogs        Tail live service logs (Ctrl+C to exit) ║
-║    bbgo          Run BearBox manually (no service)       ║
-║    bbshutdown    Play shutdown anim then stop service    ║
+║    bblogs        Tail live logs (Ctrl+C to exit)         ║
+║    bbshutdown    Play shutdown screen then stop          ║
 ║                                                          ║
-║  FILES & UPDATES                                         ║
+║  DEV                                                     ║
 ║    bbedit        cd into ~/bearbox                       ║
-║    bbupdate      git pull latest changes                 ║
-║    bbinstall     Re-run the install script               ║
-║    bbclock       Run the clock screen standalone         ║
-║    bbrotate      Toggle 180° screen flip                  ║
-║    bbkb          Run the keyboard terminal standalone    ║
+║    bbupdate      git pull + auto restart                 ║
+║    bbconfig      Edit config.json                        ║
+║    bbinstall     Re-run install.sh                       ║
+║    bbscreen      Run a screen standalone                 ║
+║                  [clock|hello|bear|offline|boot]         ║
 ║                                                          ║
 ║  WIFI                                                    ║
-║    bbwifi        Connect to a WiFi network               ║
-║    bbdisconnect  Disconnect from WiFi (pass iface name   ║
-║                  to target wlan1: bbdisconnect wlan1)    ║
+║    bbwifi        Connect to a network                    ║
+║    bbdisconnect  Disconnect (optional: iface name)       ║
 ║    bbsave        Save a network to config.json           ║
+║    bbip          Show all IPs                            ║
+║    bbnetwork     Show SSID, IP and internet status       ║
+║                                                          ║
+║  DISPLAY                                                 ║
+║    bbrotate      Toggle 180° screen flip                 ║
 ║                                                          ║
 ║  DANGER ZONE                                             ║
 ║    bbreset       Completely wipe BearBox from this Pi    ║
