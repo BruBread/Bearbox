@@ -21,7 +21,7 @@ BASE = "/home/bearbox/bearbox"
 sys.path.insert(0, os.path.join(BASE, "core"))
 sys.path.insert(0, BASE)
 
-PYTHONPATH = f"{BASE}/core:{BASE}"
+PYTHONPATH = f"{BASE}/core:{BASE}:/home/bearbox/.local/lib/python3.13/site-packages"
 
 PROFILES = {
     "2357:010c": "pentest",
