@@ -67,11 +67,19 @@ def _is_connected():
 
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 0.8
-_touch_fd    = None
-_last_tap    = 0
+
+_FMT_64   = "llHHi"
+_FMT_32   = "iIHHi"
+_SZ_64    = struct.calcsize(_FMT_64)
+_SZ_32    = struct.calcsize(_FMT_32)
+
+_touch_fd  = None
+_last_tap  = 0
+_evt_size  = _SZ_64
+_evt_fmt   = _FMT_64
 
 def _check_tap():
-    global _touch_fd, _last_tap
+    global _touch_fd, _last_tap, _evt_size, _evt_fmt
     if not os.path.exists(TOUCH_DEV):
         return False
     try:
@@ -83,12 +91,17 @@ def _check_tap():
                 r2, _, _ = select.select([_touch_fd], [], [], 0)
                 if not r2:
                     break
-                _touch_fd.read(16)
+                data = _touch_fd.read(_evt_size)
+                if not data:
+                    break
+                if len(data) == _SZ_32 and _evt_fmt == _FMT_64:
+                    _evt_fmt  = _FMT_32
+                    _evt_size = _SZ_32
             now = time.time()
             if now - _last_tap > TAP_COOLDOWN:
                 _last_tap = now
                 return True
-    except:
+    except Exception:
         _touch_fd = None
     return False
 

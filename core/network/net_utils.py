@@ -17,7 +17,6 @@ from display import new_frame, push, draw_scanlines, font, C, W, H
 # ─────────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────────
-HOTSPOT_SSID = "Franc Iphone"
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 0.8
 
@@ -44,18 +43,10 @@ def run_cmd(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
 def is_connected():
-    """
-    Returns True if we have a routable IP on any wireless interface.
-    Does NOT require internet — works in local-only / hotspot environments.
-    Falls back to an internet ping only if no local IP is found, so that
-    the connected/offline split still works on fully offline devices.
-    """
     iface = get_interface()
-    # Check for an assigned IP on the active wireless interface
     result = run_cmd(f"ip -4 addr show {iface} 2>/dev/null")
     if "inet " in result:
         return True
-    # Fallback: try any wlan interface
     for iface_name in ["wlan0", "wlan1"]:
         result = run_cmd(f"ip -4 addr show {iface_name} 2>/dev/null")
         if "inet " in result:
@@ -63,7 +54,6 @@ def is_connected():
     return False
 
 def has_internet():
-    """Separate check for actual internet access (ping 8.8.8.8)."""
     r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
     return r.returncode == 0
 
@@ -80,7 +70,6 @@ def get_interface():
     return "wlan0"
 
 def get_current_ssid():
-    """Returns currently connected SSID or empty string."""
     return run_cmd("iwgetid -r 2>/dev/null")
 
 def load_config():
@@ -92,11 +81,6 @@ def load_config():
     return {}
 
 def safe_connect(ssid, password=""):
-    """
-    Connect to a network safely.
-    Only kills wpa_supplicant if switching to a different network.
-    Never disrupts an existing working connection.
-    """
     iface        = get_interface()
     current_ssid = get_current_ssid()
     psk_line     = ('psk="' + password + '"') if password else "key_mgmt=NONE"
@@ -111,7 +95,6 @@ network={{
     with open("/tmp/bb_wpa.conf", "w") as f:
         f.write(wpa)
 
-    # only kill wpa_supplicant if switching networks
     if current_ssid != ssid:
         run_cmd("sudo pkill wpa_supplicant 2>/dev/null")
         time.sleep(1)
@@ -119,7 +102,6 @@ network={{
     run_cmd(f"sudo ip link set {iface} up")
     run_cmd(f"sudo wpa_supplicant -B -i {iface} -c /tmp/bb_wpa.conf")
 
-    # poll for connection
     deadline = time.time() + 10
     while time.time() < deadline:
         if is_connected():
@@ -131,14 +113,54 @@ network={{
 
 # ─────────────────────────────────────────────────────────────
 # TOUCH
+# Linux input_event struct:
+#   32-bit kernel:  struct input_event { timeval32 (8B); u16; u16; s32 } = 16 bytes  "iIHHi"
+#   64-bit kernel:  struct input_event { timeval64 (16B); u16; u16; s32 } = 24 bytes "llHHi"
+# We detect which at first read and stick with it.
 # ─────────────────────────────────────────────────────────────
-_touch_fd = None
+
+_FMT_64   = "llHHi"
+_FMT_32   = "iIHHi"
+_SZ_64    = struct.calcsize(_FMT_64)   # 24
+_SZ_32    = struct.calcsize(_FMT_32)   # 16
+
+_touch_fd  = None
 _last_tap  = 0
 _tap_x     = 0
 _tap_y     = 0
+_evt_size  = _SZ_64   # assume 64-bit until proven otherwise
+_evt_fmt   = _FMT_64
+
+def _parse_event(data):
+    """Parse one input_event and update _tap_x/_tap_y. Returns True if coords updated."""
+    global _tap_x, _tap_y, _evt_size, _evt_fmt
+    try:
+        _, _, etype, ecode, evalue = struct.unpack(_evt_fmt, data)
+        if etype == 3 and ecode == 0:
+            _tap_x = int(evalue * W / 4096)
+            return True
+        if etype == 3 and ecode == 1:
+            _tap_y = int(evalue * H / 4096)
+            return True
+    except struct.error:
+        # Wrong size — flip to 32-bit format
+        if _evt_fmt == _FMT_64 and len(data) == _SZ_32:
+            _evt_fmt  = _FMT_32
+            _evt_size = _SZ_32
+            try:
+                _, _, etype, ecode, evalue = struct.unpack(_evt_fmt, data)
+                if etype == 3 and ecode == 0:
+                    _tap_x = int(evalue * W / 4096)
+                    return True
+                if etype == 3 and ecode == 1:
+                    _tap_y = int(evalue * H / 4096)
+                    return True
+            except Exception:
+                pass
+    return False
 
 def check_tap():
-    global _touch_fd, _last_tap, _tap_x, _tap_y
+    global _touch_fd, _last_tap
     if not os.path.exists(TOUCH_DEV):
         return False
     try:
@@ -150,22 +172,19 @@ def check_tap():
                 r2, _, _ = select.select([_touch_fd], [], [], 0)
                 if not r2:
                     break
-                data = _touch_fd.read(16)
-                if len(data) == 16:
-                    _, _, etype, ecode, evalue = struct.unpack("llHHi", data)
-                    if etype == 3 and ecode == 0:
-                        _tap_x = int(evalue * W / 4096)
-                    if etype == 3 and ecode == 1:
-                        _tap_y = int(evalue * H / 4096)
+                data = _touch_fd.read(_evt_size)
+                if len(data) == _evt_size:
+                    _parse_event(data)
             now = time.time()
             if now - _last_tap > TAP_COOLDOWN:
                 _last_tap = now
                 return True
-    except:
+    except Exception:
         _touch_fd = None
     return False
 
 def tapped(x, y, w, h):
+    """Check if the last tap landed inside a rectangle (x, y, w, h)."""
     return x <= _tap_x <= x + w and y <= _tap_y <= y + h
 
 # ─────────────────────────────────────────────────────────────

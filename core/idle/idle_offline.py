@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import select
+import struct
 import threading
 import subprocess
 
@@ -34,10 +35,6 @@ def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
 
 def _is_connected():
-    """
-    Returns True if wlan0 has an external IP — i.e. joined a real network,
-    not just hosting our own AP (10.0.0.1) or a link-local (169.254.x.x).
-    """
     result = subprocess.run(
         "ip -4 addr show wlan0", shell=True, capture_output=True, text=True
     ).stdout
@@ -50,7 +47,6 @@ def _is_connected():
     return False
 
 def _setup_ap():
-    """Start AP on wlan0 silently."""
     try:
         _run(f"nmcli device set {AP_IFACE} managed no 2>/dev/null")
         _run("sudo pkill hostapd 2>/dev/null")
@@ -82,13 +78,22 @@ def _teardown_ap():
     _run(f"sudo ip addr flush dev {AP_IFACE} 2>/dev/null")
     _run(f"nmcli device set {AP_IFACE} managed yes 2>/dev/null")
 
+# ── Touch — 64/32-bit safe ────────────────────────────────────
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 1.2
-_touch_fd    = None
-_last_tap    = 0
+
+_FMT_64   = "llHHi"
+_FMT_32   = "iIHHi"
+_SZ_64    = struct.calcsize(_FMT_64)
+_SZ_32    = struct.calcsize(_FMT_32)
+
+_touch_fd  = None
+_last_tap  = 0
+_evt_size  = _SZ_64
+_evt_fmt   = _FMT_64
 
 def _check_tap():
-    global _touch_fd, _last_tap
+    global _touch_fd, _last_tap, _evt_size, _evt_fmt
     if not os.path.exists(TOUCH_DEV):
         return False
     try:
@@ -100,21 +105,29 @@ def _check_tap():
                 r2, _, _ = select.select([_touch_fd], [], [], 0)
                 if not r2:
                     break
-                _touch_fd.read(16)
+                data = _touch_fd.read(_evt_size)
+                if not data:
+                    break
+                # auto-detect 32-bit kernel on first short read
+                if len(data) == _SZ_32 and _evt_fmt == _FMT_64:
+                    _evt_fmt  = _FMT_32
+                    _evt_size = _SZ_32
             now = time.time()
             if now - _last_tap > TAP_COOLDOWN:
                 _last_tap = now
                 return True
-    except:
+    except Exception:
         _touch_fd = None
     return False
 
 CHECK_EVERY = 10
 
+SCREEN_NAMES = ["clock", "offline", "networks"]
+
 def run():
-    # start AP immediately in background — no adapter needed for this
     threading.Thread(target=_setup_ap, daemon=True).start()
 
+    # DRAW_SCREENS only has 2 entries — current==2 is handled separately below
     DRAW_SCREENS = [draw_clock, draw_offline]
     current      = 0
     last_inet    = time.time()
@@ -123,7 +136,6 @@ def run():
 
     try:
         while True:
-
             # internet check
             if time.time() - last_inet > CHECK_EVERY:
                 last_inet = time.time()
@@ -138,16 +150,18 @@ def run():
                             sync_time()
                     except Exception:
                         pass
-                    # set flag so idle_main skips net_check (we're already connected)
-                    os.environ["BB_SKIP_BOOT_ANIM"] = "1"
-                    os.environ["BB_SKIP_NET_CHECK"] = "1"
-                    from idle_main import run as run_idle
-                    run_idle()
-                    return
+                    # Replace this process with idle_main so the call stack
+                    # doesn't grow on every reconnect/disconnect cycle.
+                    os.execv(
+                        sys.executable,
+                        [sys.executable,
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_main.py"),
+                         "--skip-boot", "--skip-net"]
+                    )
+                    return  # never reached
 
-            # draw screens
+            # networks screen is index 2 — handled separately, no DRAW_SCREENS lookup
             if current == 2:
-                # networks screen — handles its own adapter check internally
                 result, ssid = run_networks()
                 if result == "connected":
                     print(f">> Connected to {ssid}!")
@@ -163,12 +177,13 @@ def run():
                 DRAW_SCREENS[current]()
                 if _check_tap():
                     current = (current + 1) % 3
-                    print(f">> Screen: {['clock','offline','networks'][current]}")
+                    print(f">> Screen: {SCREEN_NAMES[current]}")
 
-            time.sleep(1/30)
+            time.sleep(1 / 30)
 
     finally:
         _teardown_ap()
+
 
 if __name__ == "__main__":
     run()
