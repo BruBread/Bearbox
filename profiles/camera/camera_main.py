@@ -44,6 +44,7 @@ def run():
     # Play intro screen
     from profiles.camera.screen_camera_connected import run as play_intro
     play_intro()
+    print("[camera] Intro done, loading config...")
 
     config = _load_camera_config()
     port   = config["stream_port"]
@@ -66,6 +67,7 @@ def run():
     start_stream(state, port=port)
 
     # Run display loop on main thread (blocks until unplugged)
+    print("[camera] Starting display loop...")
     from profiles.camera.camera_display import run_display
     try:
         run_display(state, port=port)
