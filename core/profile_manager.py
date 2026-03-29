@@ -26,6 +26,7 @@ PYTHONPATH = f"{BASE}/core:{BASE}"
 PROFILES = {
     "2357:010c": "pentest",
     "03eb:2042": "rubberducky",
+    "4c4a:4a55": "camera"
 }
 
 def run(cmd):
@@ -115,7 +116,8 @@ def launch_profile(profile: str):
         "games":       f"{BASE}/profiles/games/launcher.py",
         "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
         "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
-        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",  # fixed: was ui.py
+        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",
+        "camera":      f"{BASE}/profiles/camera/camera_main.py",
     }
     script = profile_map.get(profile)
     if not script:
@@ -132,7 +134,7 @@ def launch_profile(profile: str):
 
 # Profiles that warrant a "MODULE DISCONNECTED" screen when unplugged.
 # idle and keyboard are excluded — no disconnect screen for those.
-_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky"}
+_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky", "camera"}
 
 def stop_process(process, name):
     if process is None:
