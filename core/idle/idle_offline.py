@@ -9,6 +9,13 @@ Boots straight into red clock with AP running in background.
 
 AP on wlan0 starts immediately — no adapter required for clock/offline screens.
 Adapter only needed when user tries to connect via saved networks screen.
+
+Loop order (fixed):
+  1. Draw current screen
+  2. Check tap → increment current
+  3. If NEW current is 2, networks screen runs on next iteration
+  4. Check internet periodically
+  This ensures every screen actually renders before we act on it.
 """
 
 import os
@@ -30,6 +37,11 @@ AP_IFACE = "wlan0"
 AP_IP    = "10.0.0.1"
 AP_SSID  = "BearBox-AP"
 AP_PASS  = "Bearbox123"
+
+SCREEN_NAMES = ["clock", "offline", "networks"]
+CHECK_EVERY  = 10
+
+# ── AP ────────────────────────────────────────────────────────
 
 def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
@@ -82,15 +94,15 @@ def _teardown_ap():
 TOUCH_DEV    = "/dev/input/event0"
 TAP_COOLDOWN = 1.2
 
-_FMT_64   = "llHHi"
-_FMT_32   = "iIHHi"
-_SZ_64    = struct.calcsize(_FMT_64)
-_SZ_32    = struct.calcsize(_FMT_32)
+_FMT_64  = "llHHi"
+_FMT_32  = "iIHHi"
+_SZ_64   = struct.calcsize(_FMT_64)
+_SZ_32   = struct.calcsize(_FMT_32)
 
-_touch_fd  = None
-_last_tap  = 0
-_evt_size  = _SZ_64
-_evt_fmt   = _FMT_64
+_touch_fd = None
+_last_tap = 0
+_evt_size = _SZ_64
+_evt_fmt  = _FMT_64
 
 def _check_tap():
     global _touch_fd, _last_tap, _evt_size, _evt_fmt
@@ -108,7 +120,6 @@ def _check_tap():
                 data = _touch_fd.read(_evt_size)
                 if not data:
                     break
-                # auto-detect 32-bit kernel on first short read
                 if len(data) == _SZ_32 and _evt_fmt == _FMT_64:
                     _evt_fmt  = _FMT_32
                     _evt_size = _SZ_32
@@ -120,23 +131,45 @@ def _check_tap():
         _touch_fd = None
     return False
 
-CHECK_EVERY = 10
-
-SCREEN_NAMES = ["clock", "offline", "networks"]
+# ── Main loop ─────────────────────────────────────────────────
 
 def run():
     threading.Thread(target=_setup_ap, daemon=True).start()
 
-    # DRAW_SCREENS only has 2 entries — current==2 is handled separately below
-    DRAW_SCREENS = [draw_clock, draw_offline]
-    current      = 0
-    last_inet    = time.time()
+    current   = 0
+    last_inet = time.time()
 
     print(f"Offline mode | AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
 
     try:
         while True:
-            # internet check
+
+            # ── 1. Draw current screen ────────────────────────
+            if current == 0:
+                draw_clock()
+            elif current == 1:
+                draw_offline()
+            elif current == 2:
+                # Networks screen blocks internally until user connects or backs out
+                result, ssid = run_networks()
+                if result == "connected":
+                    print(f">> Connected to {ssid}!")
+                    _teardown_ap()
+                    from screen_connected import run as play_connected
+                    play_connected()
+                    subprocess.run("sudo systemctl restart bearbox", shell=True)
+                    return
+                else:
+                    # user backed out — go back to clock
+                    current = 0
+                    continue
+
+            # ── 2. Check tap → update current for next frame ──
+            if _check_tap():
+                current = (current + 1) % 3
+                print(f">> Screen: {SCREEN_NAMES[current]}")
+
+            # ── 3. Periodic internet check ────────────────────
             if time.time() - last_inet > CHECK_EVERY:
                 last_inet = time.time()
                 if _is_connected():
@@ -150,34 +183,12 @@ def run():
                             sync_time()
                     except Exception:
                         pass
-                    # Replace this process with idle_main so the call stack
-                    # doesn't grow on every reconnect/disconnect cycle.
                     os.execv(
                         sys.executable,
                         [sys.executable,
-                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_main.py"),
-                         "--skip-boot", "--skip-net"]
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_main.py")]
                     )
                     return  # never reached
-
-            # networks screen is index 2 — handled separately, no DRAW_SCREENS lookup
-            if current == 2:
-                result, ssid = run_networks()
-                if result == "connected":
-                    print(f">> Connected to {ssid}!")
-                    _teardown_ap()
-                    from screen_connected import run as play_connected
-                    play_connected()
-                    subprocess.run("sudo systemctl restart bearbox", shell=True)
-                    return
-                else:
-                    current = 0
-                    continue
-            else:
-                DRAW_SCREENS[current]()
-                if _check_tap():
-                    current = (current + 1) % 3
-                    print(f">> Screen: {SCREEN_NAMES[current]}")
 
             time.sleep(1 / 30)
 
