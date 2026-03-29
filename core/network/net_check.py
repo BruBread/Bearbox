@@ -115,6 +115,16 @@ def _try_hotspot(done_event: threading.Event = None):
 # ─────────────────────────────────────────────────────────────
 
 def run(done_event: threading.Event = None):
+    # Force offline flag — set by bboffline alias, clears on reboot
+    if os.path.exists("/tmp/bb_force_offline"):
+        print(">> Force offline flag set — skipping net_check")
+        if done_event:
+            done_event.set()
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../idle"))
+        from idle_offline import run as run_offline
+        run_offline()
+        return
+
     """
     Run the full network startup sequence.
 

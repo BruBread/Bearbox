@@ -141,6 +141,22 @@ alias bbreset='f() {
     fi
 }; f'
 
+alias bboffline='f() {
+    touch /tmp/bb_force_offline
+    sudo pkill -f "wpa_supplicant.*wlan" 2>/dev/null
+    sudo pkill -f "dhcpcd.*wlan" 2>/dev/null
+    sudo ip addr flush dev wlan0 2>/dev/null
+    sudo ip addr flush dev wlan1 2>/dev/null
+    echo "Forced offline. Run bbonline to re-enable auto-connect."
+    sudo systemctl restart bearbox
+}; f'
+
+alias bbonline='f() {
+    rm -f /tmp/bb_force_offline
+    echo "Auto-connect re-enabled."
+    sudo systemctl restart bearbox
+}; f'
+
 # ── Help ──────────────────────────────────────────────────────
 alias bbhelp='echo "
 ╔══════════════════════════════════════════════════════════╗
