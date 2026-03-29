@@ -13,7 +13,21 @@ alias bbshutdown='sudo python3 $BB/core/screen_shutdown.py && sudo systemctl sto
 
 # ── Dev / Files ───────────────────────────────────────────────
 alias bbedit='cd ~/bearbox'
-alias bbupdate='cd ~/bearbox && git pull && echo "Done. Restarting..." && sudo systemctl restart bearbox && echo "BearBox restarted."'
+alias bbupdate='f() {
+    cd ~/bearbox || return
+    echo "Pulling latest..."
+    git pull
+    echo "Launching restart screen..."
+    sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox \
+        python3 /home/bearbox/bearbox/core/screen_restarting.py &
+    SCREEN_PID=$!
+    sleep 1
+    echo "Restarting BearBox..."
+    sudo systemctl restart bearbox
+    sleep 1
+    kill $SCREEN_PID 2>/dev/null
+    echo "Done."
+}; f'
 alias bbconfig='nano ~/bearbox/config.json'
 
 alias bbinstall='f() {
