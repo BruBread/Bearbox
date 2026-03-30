@@ -7,6 +7,7 @@ No extra drivers needed — standard Linux HID input.
 """
 
 import os
+import time
 import select
 import struct
 import threading
@@ -189,7 +190,14 @@ class KeyboardReader:
 
     def _read_loop(self):
         # auto-detect struct size on first successful parse
-        detected = False
+        detected   = False
+        retry_wait = 0.5   # seconds between reconnect attempts
+        max_retries = 10
+
+        # small delay to let USB device fully initialize
+        time.sleep(0.8)
+
+        retries = 0
         while self._running:
             try:
                 r, _, _ = select.select([self._fd], [], [], 0.1)
@@ -197,17 +205,32 @@ class KeyboardReader:
                     continue
                 data = self._fd.read(self._evsz)
                 if not data or len(data) != self._evsz:
-                    # try the other size
                     if not detected:
                         self._fmt  = EVENT_FORMAT_32
                         self._evsz = EVENT_SIZE_32
                     continue
                 self._parse(data)
                 detected = True
+                retries  = 0   # reset retry counter on successful read
             except Exception as e:
-                if self._running:
-                    print(f"[keyboard] Read error: {e}")
-                break
+                if not self._running:
+                    break
+                retries += 1
+                print(f"[keyboard] Read error ({retries}/{max_retries}): {e}")
+                if retries >= max_retries:
+                    print("[keyboard] Max retries reached, giving up")
+                    break
+                # close and reopen the device
+                try:
+                    self._fd.close()
+                except Exception:
+                    pass
+                time.sleep(retry_wait)
+                try:
+                    self._fd = open(self.device, "rb")
+                    print(f"[keyboard] Reconnected to {self.device}")
+                except Exception as reopen_err:
+                    print(f"[keyboard] Reopen failed: {reopen_err}")
 
     def _parse(self, data):
         try:
