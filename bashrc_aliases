@@ -55,32 +55,21 @@ alias bbscreen='f() {
 alias bbwifi='f() {
     read -p "SSID: " SSID
     read -p "Password (leave blank if open): " PASS
+    echo "Connecting to $SSID..."
     if [ -z "$PASS" ]; then
-        NETBLOCK="ssid=\"$SSID\"\n    key_mgmt=NONE"
+        sudo nmcli device wifi connect "$SSID" ifname wlan0
     else
-        NETBLOCK="ssid=\"$SSID\"\n    psk=\"$PASS\""
+        sudo nmcli device wifi connect "$SSID" password "$PASS" ifname wlan0
     fi
-    printf "ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\nupdate_config=1\nnetwork={\n    $NETBLOCK\n}\n" > /tmp/bb_connect.conf
-    sudo pkill wpa_supplicant 2>/dev/null
-    sleep 1
-    sudo wpa_supplicant -B -i wlan0 -c /tmp/bb_connect.conf
-    sleep 3
-    sudo dhcpcd wlan0 2>/dev/null || sudo dhclient wlan0 2>/dev/null
     sleep 2
-    echo "Connected: $(iwgetid -r 2>/dev/null || echo none)"
-    echo "IP: $(hostname -I)"
+    echo "SSID: $(iwgetid -r 2>/dev/null || echo none)"
+    echo "IP:   $(hostname -I | awk "{print $1}")"
 }; f'
 
 alias bbdisconnect='f() {
     IFACE="${1:-wlan0}"
     echo "Disconnecting $IFACE..."
-    sudo pkill -f "wpa_supplicant.*$IFACE" 2>/dev/null
-    sudo pkill -f "dhcpcd.*$IFACE" 2>/dev/null
-    sudo pkill -f "dhclient.*$IFACE" 2>/dev/null
-    sleep 1
-    sudo ip addr flush dev "$IFACE" 2>/dev/null
-    sudo ip link set "$IFACE" down 2>/dev/null
-    sudo ip link set "$IFACE" up 2>/dev/null
+    sudo nmcli device disconnect "$IFACE" 2>/dev/null
     echo "Disconnected."
 }; f'
 
@@ -98,6 +87,7 @@ c.setdefault(\"saved_networks\", {})[\"$S\"] = \"$P\"
 json.dump(c, open(path, \"w\"), indent=4)
 print(\"Saved: $S\")
 "
+    echo "Run bbrestart for BearBox to pick it up on next boot."
 }; f'
 
 alias bbip='hostname -I | tr " " "\n" | grep -v "^$"'
@@ -143,10 +133,7 @@ alias bbreset='f() {
 
 alias bboffline='f() {
     touch /tmp/bb_force_offline
-    sudo pkill -f "wpa_supplicant.*wlan" 2>/dev/null
-    sudo pkill -f "dhcpcd.*wlan" 2>/dev/null
-    sudo ip addr flush dev wlan0 2>/dev/null
-    sudo ip addr flush dev wlan1 2>/dev/null
+    sudo nmcli device disconnect wlan0 2>/dev/null
     echo "Forced offline. Run bbonline to re-enable auto-connect."
     sudo systemctl restart bearbox
 }; f'
@@ -184,6 +171,8 @@ alias bbhelp='echo "
 ║    bbsave        Save a network to config.json           ║
 ║    bbip          Show all IPs                            ║
 ║    bbnetwork     Show SSID, IP and internet status       ║
+║    bboffline     Force offline mode for testing          ║
+║    bbonline      Re-enable auto-connect                  ║
 ║                                                          ║
 ║  DISPLAY                                                 ║
 ║    bbrotate      Toggle 180° screen flip                 ║
