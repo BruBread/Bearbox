@@ -62,6 +62,7 @@ UPDATE_CHECK_INTERVAL = 250    # re-check every 5 minutes
 # ║           DON'T EDIT BELOW HERE              ║
 # ╚══════════════════════════════════════════════╝
 
+
 _F = {}
 
 def _fonts():
