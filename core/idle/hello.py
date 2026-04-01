@@ -400,6 +400,7 @@ def reset():
     Call this whenever the idle loop switches AWAY from this screen
     so the next visit always triggers a fresh check.
     """
+
     global _checked_this_visit, _update_available
     _checked_this_visit = False
     _update_available   = False
