@@ -23,7 +23,7 @@ from display import new_frame, push, font, C, W, H
 # CONFIG
 # ─────────────────────────────────────────────────────────────
 DURATION       = 5.0    # max animation seconds (cut short if net_check finishes)
-MIN_DURATION   = 1.0    # always show at least this long regardless of net result
+MIN_DURATION   = 0.5    # always show at least this long regardless of net result (was 1.0)
 HOLD_START     = 0.65   # when BEARBOX is fully revealed — holds here
 HOLD_END       = 0.85   # when fade out begins
 LOGO_TEXT      = "BEARBOX"

@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../
 from network.net_utils import is_connected, has_internet, sync_time, run_cmd, load_config
 
 TIME_FILE       = "/home/bearbox/bearbox/.last_time"
-CONNECT_TIMEOUT = 15    # seconds to wait per network
-POLL_INTERVAL   = 0.5
+CONNECT_TIMEOUT = 8     # seconds to wait per network (was 15)
+POLL_INTERVAL   = 0.3   # poll more frequently (was 0.5)
 
 # ─────────────────────────────────────────────────────────────
 
@@ -99,7 +99,7 @@ def _try_all_networks(done_event=None):
     # Scan for available networks first so nmcli knows what's in range
     print(">> Scanning for networks...")
     run_cmd("sudo nmcli device wifi rescan 2>/dev/null")
-    time.sleep(2)
+    time.sleep(0.8)  # was 2 — 0.8s is enough for nmcli to populate results
 
     # Get available SSIDs
     available = run_cmd("nmcli -t -f SSID device wifi list 2>/dev/null")
