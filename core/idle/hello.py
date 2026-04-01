@@ -52,11 +52,10 @@ FLICKER_CHANCE   = 0.04      # chance of full flicker per frame
 BG_COLS     = 12             # number of background columns
 
 # ── Update check settings
-REPO_OWNER            = "BruBread"
-REPO_NAME             = "Bearbox"
-BRANCH                = "main"
-REPO_PATH             = "/home/bearbox/bearbox"
-UPDATE_CHECK_INTERVAL = 250    # re-check every 5 minutes
+REPO_OWNER  = "BruBread"
+REPO_NAME   = "Bearbox"
+BRANCH      = "main"
+REPO_PATH   = "/home/bearbox/bearbox"
 
 # ╔══════════════════════════════════════════════╗
 # ║           DON'T EDIT BELOW HERE              ║
@@ -149,9 +148,11 @@ def _update_glitch():
 # ── UPDATE CHECK ──────────────────────────────────────────────
 _update_available   = False
 _update_checking    = False
-_update_last_check  = 0.0
 _update_in_progress = False
 _update_btn_rect    = None   # (x, y, w, h) — set each frame so tapped() works
+
+# Tracks whether we've kicked off the check for this screen visit
+_checked_this_visit = False
 
 def _get_local_sha():
     try:
@@ -176,24 +177,30 @@ def _get_remote_sha():
         return None
 
 def _check_update_thread():
-    global _update_available, _update_checking, _update_last_check
+    global _update_available, _update_checking
     _update_checking = True
     try:
         local  = _get_local_sha()
         remote = _get_remote_sha()
         if local and remote and local != remote:
             _update_available = True
-        # if check failed (no remote sha), leave _update_available as-is
+        else:
+            _update_available = False
     except Exception:
         pass
-    _update_checking   = False
-    _update_last_check = time.time()
+    _update_checking = False
 
-def _maybe_check_update():
-    if _update_in_progress or _update_checking:
+def trigger_update_check():
+    """
+    Call this once when the screen becomes active.
+    Kicks off a background thread to check for updates.
+    Resets state so a fresh check always happens on each visit.
+    """
+    global _update_available, _update_checking, _checked_this_visit
+    if _update_checking or _update_in_progress:
         return
-    if time.time() - _update_last_check < UPDATE_CHECK_INTERVAL:
-        return
+    _update_available   = False   # reset — show clean state while checking
+    _checked_this_visit = True
     threading.Thread(target=_check_update_thread, daemon=True).start()
 
 def _do_update():
@@ -252,8 +259,17 @@ def _draw_main(d, F):
 
     if _update_available:
         _draw_update_btn(d, F, l2_y)
+    elif _update_checking:
+        _draw_checking(d, F, l2_y)
     else:
         _draw_line2(d, F, l2_y)
+
+def _draw_checking(d, F, y):
+    """Small 'checking...' indicator while the update thread runs."""
+    dots  = "." * (int(time.time() * 2) % 4)
+    label = f"checking{dots}"
+    lw    = F["sub"].getbbox(label)[2] - F["sub"].getbbox(label)[0]
+    d.text(((W - lw) // 2, y + 10), label, font=F["sub"], fill=C["dimblue"])
 
 def _draw_line2(d, F, y):
     def tw(t): return F["main"].getbbox(t)[2] - F["main"].getbbox(t)[0]
@@ -300,7 +316,7 @@ def _draw_update_btn(d, F, y):
     d.rectangle([btn_x, y, btn_x + btn_w, y + btn_h],
                 fill=C["panel"], outline=outline_col)
 
-    # Faint horizontal scan stripes inside — same vibe as draw_scanlines
+    # Faint horizontal scan stripes inside
     stripe_col = (0, int(20 + pulse * 10), int(40 + pulse * 25))
     for sy in range(y + 5, y + btn_h - 4, 6):
         d.line([(btn_x + 2, sy), (btn_x + btn_w - 2, sy)],
@@ -318,12 +334,12 @@ def _draw_update_btn(d, F, y):
     text_col = outline_col if not _update_in_progress else C["dimwhite"]
     d.text((lx, ly), label, font=F["btn"], fill=text_col)
 
-    # Sub-label — matches CREDIT / underline style
+    # Sub-label
     sw = F["sub"].getbbox(sub)[2] - F["sub"].getbbox(sub)[0]
     sx = (W - sw) // 2
     d.text((sx, y + btn_h + 6), sub, font=F["sub"], fill=C["dimblue"])
 
-    # Underline — same as LINE2 underline in hello.py
+    # Underline
     d.line([(btn_x, y + btn_h + 22), (btn_x + btn_w, y + btn_h + 22)],
            fill=C["dimblue"], width=2)
 
@@ -341,7 +357,7 @@ _tick      = 0
 _bg_inited = False
 
 def draw():
-    global _tick, _bg_inited
+    global _tick, _bg_inited, _checked_this_visit
     _tick += 1
 
     F = _fonts()
@@ -349,8 +365,9 @@ def draw():
         _init_bg(F)
         _bg_inited = True
 
-    # Background update check (non-blocking)
-    _maybe_check_update()
+    # Kick off update check once on first draw (i.e. screen entry)
+    if not _checked_this_visit:
+        trigger_update_check()
 
     # Handle tap on update button
     if _update_available and not _update_in_progress:
@@ -378,10 +395,18 @@ def draw():
 
     push(img)
 
+def reset():
+    """
+    Call this whenever the idle loop switches AWAY from this screen
+    so the next visit always triggers a fresh check.
+    """
+    global _checked_this_visit, _update_available
+    _checked_this_visit = False
+    _update_available   = False
+
 # ── STANDALONE ────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Running HELLO LOSER — Ctrl+C to stop")
-    _update_last_check = 0   # force immediate check
     while True:
         draw()
         time.sleep(1/30)
