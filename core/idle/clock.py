@@ -5,10 +5,11 @@ Pillow + direct framebuffer (no pygame/SDL needed)
 480x320 landscape
 
 Corner overlays:
-  Top Left     — CPU % + temperature
-  Top Right    — RAM %
-  Bottom Left  — Storage used/total
+  Top Left     — CPU % bar
+  Top Right    — RAM % bar
+  Bottom Left  — Storage used/total bar
   Bottom Right — IP address
+  Top Center   — Temperature segmented bar
 """
 
 import time
@@ -42,7 +43,7 @@ CLOCK_ZONE   = 0.65   # 0.0-1.0, how much screen height clock owns
 
 # ── Network name (above clock) ────────────────
 NETWORK_OFFSET_Y = 0  # pixels above the clock (negative = higher up)
-                        # 0 = right above clock, -20 = higher, +10 = closer
+                       # 0 = right above clock, -20 = higher, +10 = closer
 
 # ── AM/PM indicator (next to seconds) ─────────
 AMPM_OFFSET_X = 4     # pixels right of seconds
@@ -60,6 +61,21 @@ QUOTE_LINE   = 18     # line height between wrapped quote lines
 
 # ── Corner stats ──────────────────────────────
 CORNER_PAD   = 8      # padding from screen edges
+
+# ── Corner bar dimensions ─────────────────────
+BAR_W        = 60     # width of corner stat bars
+BAR_H        = 5      # height of corner stat bars
+
+# ── Temperature bar (top center) ──────────────
+TEMP_BAR_W      = 80   # total width of the segmented bar
+TEMP_BAR_H      = 6    # height of each segment
+TEMP_SEG_COUNT  = 10   # number of segments
+TEMP_SEG_GAP    = 2    # gap between segments
+TEMP_BAR_Y      = 5    # Y position from top of screen
+TEMP_LABEL_SIZE = 10   # label font size
+# Thresholds (°C): green=okay, yellow=concerning, red=BAD
+TEMP_GREEN_MAX  = 60
+TEMP_YELLOW_MAX = 75
 
 # ── Quote timing ──────────────────────────────
 TYPE_SPEED   = 0.045  # seconds per character
@@ -201,44 +217,108 @@ def _fonts():
         _F["quote"]   = font(QUOTE_SIZE)
         _F["label"]   = font(LABEL_SIZE)
         _F["stat"]    = font(STAT_SIZE,    bold=True)
+        _F["templbl"] = font(TEMP_LABEL_SIZE)
     return _F
+
+# ── HELPER: slim filled bar ───────────────────────────────────
+def _draw_stat_bar(d, x, y, pct, color, w=BAR_W, h=BAR_H):
+    """Dim-outlined track with a filled portion scaled to pct (0–100)."""
+    # track outline
+    d.rectangle([x, y, x + w, y + h], outline=C["dimblue"])
+    # fill
+    fill_w = max(2, int(w * min(pct, 100) / 100))
+    d.rectangle([x + 1, y + 1, x + fill_w - 1, y + h - 1], fill=color)
+
+# ── HELPER: segmented temperature bar (top center) ────────────
+def _draw_temp_bar(d, F, temp):
+    """
+    Segmented bar centered at top of screen.
+    green  < TEMP_GREEN_MAX °C
+    yellow < TEMP_YELLOW_MAX °C
+    red    ≥ TEMP_YELLOW_MAX °C
+    """
+    if temp < TEMP_GREEN_MAX:
+        bar_color = C["green"]
+    elif temp < TEMP_YELLOW_MAX:
+        bar_color = C["amber"]
+    else:
+        bar_color = C["red"]
+
+    # map 0–90 °C → 0–100%
+    temp_pct = min(max(temp / 90.0, 0.0), 1.0)
+    lit_segs = int(temp_pct * TEMP_SEG_COUNT)
+
+    seg_w   = (TEMP_BAR_W - (TEMP_SEG_COUNT - 1) * TEMP_SEG_GAP) // TEMP_SEG_COUNT
+    start_x = (W - TEMP_BAR_W) // 2
+    y       = TEMP_BAR_Y
+
+    for i in range(TEMP_SEG_COUNT):
+        sx = start_x + i * (seg_w + TEMP_SEG_GAP)
+        if i < lit_segs:
+            d.rectangle([sx, y, sx + seg_w, y + TEMP_BAR_H], fill=bar_color)
+        else:
+            d.rectangle([sx, y, sx + seg_w, y + TEMP_BAR_H], outline=C["dimblue"])
+
+    # tiny °C label just right of the bar
+    label = f"{temp:.0f}C"
+    lx = start_x + TEMP_BAR_W + 5
+    ly = y - 1
+    d.text((lx, ly), label, font=F["templbl"], fill=bar_color)
 
 # ── CORNERS ───────────────────────────────────────────────────
 
 def _corner_tl(d, F):
-    cpu_pct  = _stats["cpu"]
-    temp     = _stats["temp"]
-    cpu_col  = C["blue"]  if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
-    temp_col = C["blue"]  if temp    < 60 else C["amber"] if temp    < 75 else C["red"]
+    """Top-left: CPU label + percentage + bar"""
+    cpu_pct = _stats["cpu"]
+    col     = C["blue"] if cpu_pct < 60 else C["amber"] if cpu_pct < 85 else C["red"]
+    val_str = f"{cpu_pct:.0f}%"
+
+    # "CPU  42%" on one line
     d.text((CORNER_PAD, CORNER_PAD),
            "CPU", font=F["label"], fill=C["dimwhite"])
-    d.text((CORNER_PAD, CORNER_PAD + 14),
-           f"{cpu_pct:.1f}%", font=F["stat"], fill=cpu_col)
-    d.text((CORNER_PAD + 55, CORNER_PAD + 14),
-           f"{temp:.1f}C", font=F["stat"], fill=temp_col)
+    lbl_w = F["label"].getbbox("CPU")[2]
+    d.text((CORNER_PAD + lbl_w + 4, CORNER_PAD),
+           val_str, font=F["label"], fill=col)
+    # bar below
+    _draw_stat_bar(d, CORNER_PAD, CORNER_PAD + 14, cpu_pct, col)
 
 def _corner_tr(d, F):
+    """Top-right: RAM label + percentage + bar"""
     ram_pct = _stats["ram"]
-    ram_col = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
-    ram_str = f"{ram_pct:.1f}%"
+    col     = C["blue"] if ram_pct < 60 else C["amber"] if ram_pct < 85 else C["red"]
+    val_str = f"{ram_pct:.0f}%"
+
+    bar_x   = W - CORNER_PAD - BAR_W
     lbl_w   = F["label"].getbbox("RAM")[2]
-    val_w   = F["stat"].getbbox(ram_str)[2]
+    val_w   = F["label"].getbbox(val_str)[2]
+
+    # right-align "RAM" then value to the left of it
     d.text((W - CORNER_PAD - lbl_w, CORNER_PAD),
            "RAM", font=F["label"], fill=C["dimwhite"])
-    d.text((W - CORNER_PAD - val_w, CORNER_PAD + 14),
-           ram_str, font=F["stat"], fill=ram_col)
+    d.text((bar_x - val_w - 4, CORNER_PAD),
+           val_str, font=F["label"], fill=col)
+    _draw_stat_bar(d, bar_x, CORNER_PAD + 14, ram_pct, col)
 
 def _corner_bl(d, F):
-    used  = _stats["disk_used"]
-    total = _stats["disk_total"]
-    pct   = (used / total * 100) if total > 0 else 0
-    col   = C["blue"] if pct < 70 else C["amber"] if pct < 90 else C["red"]
-    d.text((CORNER_PAD, H - CORNER_PAD - 30),
+    """Bottom-left: Disk label + used/total + bar"""
+    used    = _stats["disk_used"]
+    total   = _stats["disk_total"]
+    pct     = (used / total * 100) if total > 0 else 0
+    col     = C["blue"] if pct < 70 else C["amber"] if pct < 90 else C["red"]
+    val_str = f"{used:.1f}/{total:.1f}G"
+
+    bar_y   = H - CORNER_PAD - BAR_H
+    label_y = bar_y - 16
+
+    d.text((CORNER_PAD, label_y),
            "DISK", font=F["label"], fill=C["dimwhite"])
-    d.text((CORNER_PAD, H - CORNER_PAD - 16),
-           f"{used:.1f}/{total:.1f}GB", font=F["stat"], fill=col)
+    lbl_w = F["label"].getbbox("DISK")[2]
+    d.text((CORNER_PAD + lbl_w + 4, label_y),
+           val_str, font=F["label"], fill=col)
+    _draw_stat_bar(d, CORNER_PAD, bar_y, pct, col)
 
 def _corner_br(d, F):
+    """Bottom-right: IP address (text — no sensible bar for an IP)"""
     ip    = _stats["ip"]
     lbl_w = F["label"].getbbox("IP")[2]
     val_w = F["stat"].getbbox(ip)[2]
@@ -262,12 +342,15 @@ def draw():
     img, d = new_frame()
     draw_scanlines(d)
 
+    # ── Temperature bar (top center) ─────────────────────────
+    _draw_temp_bar(d, F, _stats["temp"])
+
     # ── Clock (12hr format) ───────────────────────────────────
     def tw(txt, f): return f.getbbox(txt)[2] - f.getbbox(txt)[0]
     def th(txt, f): return f.getbbox(txt)[3] - f.getbbox(txt)[1]
 
-    hour_12  = time.strftime("%I")   # 12-hour, zero padded
-    am_pm    = time.strftime("%p")   # AM or PM
+    hour_12  = time.strftime("%I")
+    am_pm    = time.strftime("%p")
     min_str  = time.strftime("%M")
     sec_str  = f"{sec:02d}"
 
@@ -275,7 +358,7 @@ def draw():
         (hour_12,  C["white"]),
         (":",      C["white"]),
         (min_str,  C["white"]),
-        (":",      C["blue"] if sec % 2 == 0 else C["dimblue"]),  # blinks
+        (":",      C["blue"] if sec % 2 == 0 else C["dimblue"]),
         (sec_str,  C["blue"]),
     ]
 
@@ -289,7 +372,7 @@ def draw():
         d.text((x, clock_y), text, font=F["clock"], fill=color)
         x += tw(text, F["clock"])
 
-    # ── AM/PM indicator (right of seconds, bottom aligned) ────
+    # ── AM/PM indicator ───────────────────────────────────────
     ampm_x = (W - total_w) // 2 + total_w + AMPM_OFFSET_X
     ampm_h = th(am_pm, F["ampm"])
     ampm_y = clock_y + clock_h - ampm_h + AMPM_OFFSET_Y
