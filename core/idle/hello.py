@@ -148,24 +148,39 @@ def _get_remote_sha():
         print(f"[update] remote sha error: {e}")
         return None
 
+
 def _check_thread():
     global _state, _local_sha, _remote_sha, _status_msg
     _state = "checking"
-    local  = _get_local_sha()
-    remote = _get_remote_sha()
-    _local_sha  = local
-    _remote_sha = remote
-    print(f"[update] local={local[:8] if local else 'none'} "
-          f"remote={remote[:8] if remote else 'none'}")
-    if not remote:
-        _status_msg = "could not reach github"
+    try:
+        # fetch latest from remote
+        subprocess.run(
+            ["git", "-C", REPO_PATH, "fetch", "origin", BRANCH],
+            capture_output=True, timeout=10
+        )
+        # local HEAD
+        local = subprocess.run(
+            ["git", "-C", REPO_PATH, "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        # remote HEAD after fetch
+        remote = subprocess.run(
+            ["git", "-C", REPO_PATH, "rev-parse", f"origin/{BRANCH}"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+
+        _local_sha = local
+        _remote_sha = remote
+        print(f"[update] local={local[:8]} remote={remote[:8]}")
+
+        if local and remote and local != remote:
+            _state = "available"
+        else:
+            _state = "uptodate"
+    except Exception as e:
+        print(f"[update] check error: {e}")
+        _status_msg = "check failed"
         _state = "idle"
-    elif local and remote and local != remote:
-        _status_msg = ""
-        _state = "available"
-    else:
-        _status_msg = ""
-        _state = "uptodate"
 
 def _do_update():
     global _state
