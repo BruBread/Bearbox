@@ -89,80 +89,67 @@ def _draw_bg(d, F):
                        fill=(0, a, int(a * 1.5)))
 
 # ── Update state ──────────────────────────────────────────────
-_state           = "idle"
-_local_sha       = None
-_remote_sha      = None
-_check_requested = True    # check immediately on first draw
-_update_btn_rect = None    # (x, y, w, h) of action button — set each frame
-_status_msg      = ""
-
-# Return value from draw() — None means stay, True means "cycle to next screen"
-_cycle_requested = False
+_state            = "idle"
+_local_sha        = None
+_remote_sha       = None
+_check_requested  = True    # check immediately on first draw
+_last_failed_at   = 0.0     # timestamp of last failed check — enforces cooldown
+FAIL_COOLDOWN     = 60.0    # seconds before retrying after a failure
+_update_btn_rect  = None    # (x, y, w, h) of action button — set each frame
+_status_msg       = ""
 
 def request_update_check():
     global _check_requested
     _check_requested = True
 
-def _run(cmd, timeout=10):
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def _git(args, timeout=15):
+    """Run a git command as the bearbox user (service runs as root)."""
+    cmd = ["sudo", "-u", "bearbox", "git", "-C", REPO_PATH] + args
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "HOME": "/home/bearbox"}
+    r   = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    print(f"[hello] git {' '.join(args)} → rc={r.returncode} {r.stderr.strip()[:60]}")
     return r.stdout.strip() if r.returncode == 0 else None
 
 def _check_thread():
-    global _state, _local_sha, _remote_sha, _status_msg
+    global _state, _local_sha, _remote_sha, _status_msg, _last_failed_at
     _state = "checking"
     try:
-        # ── verify repo exists ────────────────────────────────
         if not os.path.isdir(REPO_PATH):
             _status_msg = f"repo not found: {REPO_PATH}"
             _state = "idle"
+            _last_failed_at = time.time()
             return
 
-        # ── find .git — handle both normal repo and worktrees ─
-        git_dir = None
-        for candidate in [
-            os.path.join(REPO_PATH, ".git"),
-            REPO_PATH,                          # bare repo
-        ]:
-            r = subprocess.run(
-                ["git", "-C", REPO_PATH, "rev-parse", "--git-dir"],
-                capture_output=True, text=True, timeout=5
-            )
-            if r.returncode == 0:
-                git_dir = r.stdout.strip()
-                break
-
+        # Verify it's a valid git repo
+        git_dir = _git(["rev-parse", "--git-dir"], timeout=5)
         if git_dir is None:
-            # Last-ditch: maybe service runs as root, try with sudo
-            r = subprocess.run(
-                ["sudo", "-u", "bearbox", "git", "-C", REPO_PATH,
-                 "rev-parse", "--git-dir"],
-                capture_output=True, text=True, timeout=5
-            )
-            if r.returncode != 0:
-                _status_msg = "not a git repo — run install.sh"
-                _state = "idle"
-                return
+            _status_msg = "not a git repo — run install.sh"
+            _state = "idle"
+            _last_failed_at = time.time()
+            return
 
-        # ── fetch ─────────────────────────────────────────────
-        fetch = subprocess.run(
-            ["git", "-C", REPO_PATH, "fetch", "origin", BRANCH],
-            capture_output=True, text=True, timeout=15,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        )
-        if fetch.returncode != 0:
+        # Fetch latest refs from origin
+        fetched = _git(["fetch", "origin", BRANCH], timeout=20)
+        if fetched is None:
+            # fetch returns empty string on success, None on error
+            # re-check: None means non-zero exit
             _status_msg = "fetch failed — check network"
             _state = "idle"
+            _last_failed_at = time.time()
             return
 
-        local  = _run(["git", "-C", REPO_PATH, "rev-parse", "HEAD"])
-        remote = _run(["git", "-C", REPO_PATH, "rev-parse", f"origin/{BRANCH}"])
+        local  = _git(["rev-parse", "HEAD"])
+        remote = _git(["rev-parse", f"origin/{BRANCH}"])
 
         _local_sha  = local
         _remote_sha = remote
 
+        print(f"[hello] local={local[:8] if local else 'none'}  remote={remote[:8] if remote else 'none'}")
+
         if not local or not remote:
             _status_msg = "git error — check logs"
             _state = "idle"
+            _last_failed_at = time.time()
         elif local != remote:
             _status_msg = ""
             _state = "available"
@@ -173,9 +160,11 @@ def _check_thread():
     except subprocess.TimeoutExpired:
         _status_msg = "fetch timed out"
         _state = "idle"
+        _last_failed_at = time.time()
     except Exception as e:
-        _status_msg = str(e)[:40]
+        _status_msg = str(e)[:60]
         _state = "idle"
+        _last_failed_at = time.time()
 
 def _do_update():
     global _state
@@ -200,6 +189,9 @@ def _maybe_check():
     if _state in ("checking", "updating"):
         return
     if not _check_requested:
+        return
+    # Don't hammer git if the last attempt failed recently
+    if time.time() - _last_failed_at < FAIL_COOLDOWN:
         return
     _check_requested = False
     threading.Thread(target=_check_thread, daemon=True).start()
