@@ -313,6 +313,7 @@ def draw():
 
     return False
 
+
 if __name__ == "__main__":
     print("Update screen — Ctrl+C to stop")
     while True:
