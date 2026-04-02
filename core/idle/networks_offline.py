@@ -15,12 +15,11 @@ import os
 import sys
 import time
 import json
-import select
-import struct
 import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
+from network.net_utils import check_tap, tapped
 
 CONFIG_PATH  = "/home/bearbox/bearbox/config.json"
 MAX_NETWORKS = 4
@@ -39,61 +38,6 @@ R = {
     "white":    (255, 220, 220),
     "dimwhite": (140, 80,  80),
 }
-
-# ── Touch — 64/32-bit safe ────────────────────────────────────
-TOUCH_DEV    = "/dev/input/event0"
-TAP_COOLDOWN = 0.8
-
-_FMT_64  = "llHHi"
-_FMT_32  = "iIHHi"
-_SZ_64   = struct.calcsize(_FMT_64)
-_SZ_32   = struct.calcsize(_FMT_32)
-
-_touch_fd = None
-_last_tap = 0
-_tap_x    = 0
-_tap_y    = 0
-_evt_size = _SZ_64
-_evt_fmt  = _FMT_64
-
-def _check_tap():
-    global _touch_fd, _last_tap, _tap_x, _tap_y, _evt_size, _evt_fmt
-    if not os.path.exists(TOUCH_DEV):
-        return False
-    try:
-        if _touch_fd is None:
-            _touch_fd = open(TOUCH_DEV, "rb")
-        r, _, _ = select.select([_touch_fd], [], [], 0)
-        if r:
-            while True:
-                r2, _, _ = select.select([_touch_fd], [], [], 0)
-                if not r2:
-                    break
-                data = _touch_fd.read(_evt_size)
-                if not data:
-                    break
-                if len(data) == _SZ_32 and _evt_fmt == _FMT_64:
-                    _evt_fmt  = _FMT_32
-                    _evt_size = _SZ_32
-                if len(data) == _evt_size:
-                    try:
-                        _, _, etype, ecode, evalue = struct.unpack(_evt_fmt, data)
-                        if etype == 3 and ecode == 0:
-                            _tap_x = int(evalue * W / 4096)
-                        if etype == 3 and ecode == 1:
-                            _tap_y = int(evalue * H / 4096)
-                    except struct.error:
-                        pass
-            now = time.time()
-            if now - _last_tap > TAP_COOLDOWN:
-                _last_tap = now
-                return True
-    except Exception:
-        _touch_fd = None
-    return False
-
-def _tapped(x, y, w, h):
-    return x <= _tap_x <= x + w and y <= _tap_y <= y + h
 
 # ── Helpers ───────────────────────────────────────────────────
 
@@ -300,10 +244,10 @@ def run():
 
         push(img)
 
-        if _check_tap():
+        if check_tap():
             hit = False
             for (bx, by, bw, bh, ssid) in btn_rects:
-                if _tapped(bx, by, bw, bh):
+                if tapped(bx, by, bw, bh):
                     hit = True
                     _draw_connecting(ssid)
                     if _try_connect(ssid, networks.get(ssid, "")):

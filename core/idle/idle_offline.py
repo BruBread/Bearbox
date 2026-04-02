@@ -21,8 +21,6 @@ Loop order (fixed):
 import os
 import sys
 import time
-import select
-import struct
 import threading
 import subprocess
 
@@ -32,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../
 from clock_offline    import draw as draw_clock
 from hello_offline    import draw as draw_offline
 from networks_offline import run  as run_networks
+from network.net_utils import check_tap
 
 AP_IFACE = "wlan0"
 AP_IP    = "10.0.0.1"
@@ -90,47 +89,6 @@ def _teardown_ap():
     _run(f"sudo ip addr flush dev {AP_IFACE} 2>/dev/null")
     _run(f"nmcli device set {AP_IFACE} managed yes 2>/dev/null")
 
-# ── Touch — 64/32-bit safe ────────────────────────────────────
-TOUCH_DEV    = "/dev/input/event0"
-TAP_COOLDOWN = 1.2
-
-_FMT_64  = "llHHi"
-_FMT_32  = "iIHHi"
-_SZ_64   = struct.calcsize(_FMT_64)
-_SZ_32   = struct.calcsize(_FMT_32)
-
-_touch_fd = None
-_last_tap = 0
-_evt_size = _SZ_64
-_evt_fmt  = _FMT_64
-
-def _check_tap():
-    global _touch_fd, _last_tap, _evt_size, _evt_fmt
-    if not os.path.exists(TOUCH_DEV):
-        return False
-    try:
-        if _touch_fd is None:
-            _touch_fd = open(TOUCH_DEV, "rb")
-        r, _, _ = select.select([_touch_fd], [], [], 0)
-        if r:
-            while True:
-                r2, _, _ = select.select([_touch_fd], [], [], 0)
-                if not r2:
-                    break
-                data = _touch_fd.read(_evt_size)
-                if not data:
-                    break
-                if len(data) == _SZ_32 and _evt_fmt == _FMT_64:
-                    _evt_fmt  = _FMT_32
-                    _evt_size = _SZ_32
-            now = time.time()
-            if now - _last_tap > TAP_COOLDOWN:
-                _last_tap = now
-                return True
-    except Exception:
-        _touch_fd = None
-    return False
-
 # ── Main loop ─────────────────────────────────────────────────
 
 def run():
@@ -146,9 +104,9 @@ def run():
 
             # ── 1. Draw current screen ────────────────────────
             if current == 0:
-                draw_clock()
+                result = draw_clock()
             elif current == 1:
-                draw_offline()
+                result = draw_offline()
             elif current == 2:
                 # Networks screen blocks internally until user connects or backs out
                 result, ssid = run_networks()
@@ -164,10 +122,17 @@ def run():
                     current = 0
                     continue
 
-            # ── 2. Check tap → update current for next frame ──
-            if _check_tap():
+            # ── 2. True/False/None protocol ───────────────────
+            # result is True  → screen got a tap outside a button → cycle
+            # result is False → screen consumed the tap (or busy)  → don't cycle
+            # result is None  → no tap yet → fall through to global check_tap
+            if result is True:
                 current = (current + 1) % 3
                 print(f">> Screen: {SCREEN_NAMES[current]}")
+            elif result is None and check_tap():
+                current = (current + 1) % 3
+                print(f">> Screen: {SCREEN_NAMES[current]}")
+            # result is False → do nothing, tap already consumed
 
             # ── 3. Periodic internet check ────────────────────
             if time.time() - last_inet > CHECK_EVERY:

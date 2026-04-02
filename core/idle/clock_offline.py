@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, draw_text_centered, draw_scanlines, wrap_text, font, W, H
+from network.net_utils import check_tap
 
 # ╔══════════════════════════════════════════════╗
 # ║              EDIT THIS BLOCK                 ║
@@ -273,6 +274,11 @@ def draw():
     _corner_br(d, F)
 
     push(img)
+
+    # Tap handling: return True (cycle), False (button handled), None (no tap)
+    if check_tap():
+        return True   # tap outside any button — idle_offline should cycle
+    return None       # no tap this frame
 
 if __name__ == "__main__":
     print("Offline clock — Ctrl+C to stop")

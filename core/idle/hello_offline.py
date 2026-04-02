@@ -13,6 +13,7 @@ import string
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
+from network.net_utils import check_tap
 
 # ╔══════════════════════════════════════════════╗
 # ║              EDIT THIS BLOCK                 ║
@@ -190,6 +191,11 @@ def draw():
     _draw_credit(d, F)
 
     push(img)
+
+    # Tap handling: return True (cycle), False (button handled), None (no tap)
+    if check_tap():
+        return True   # tap — idle_offline should cycle
+    return None       # no tap this frame
 
 if __name__ == "__main__":
     print("Offline screen — Ctrl+C to stop")
