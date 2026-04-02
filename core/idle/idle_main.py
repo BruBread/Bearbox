@@ -131,14 +131,16 @@ def run():
     print(f"BearBox idle — tap to cycle | screen: {SCREENS[current][0]}")
 
     while True:
-        # draw() returns True when the screen itself consumed a tap and
-        # wants to cycle (e.g. hello.py tapped outside the button).
-        # For all other screens it returns None, so we fall back to
-        # _check_tap() — which is now net_utils.check_tap(), the same fd
-        # that coordinate-aware screens use. One fd, no event stealing.
-        should_cycle = SCREENS[current][1]()
+        # Screens return:
+        #   True  — they handled a tap and want to cycle to the next screen
+        #   False — they handled a tap internally (button press), do NOT cycle
+        #   None  — no tap consumed, fall through to the global tap check
+        result = SCREENS[current][1]()
 
-        if should_cycle or _check_tap():
+        if result is True:
+            current = (current + 1) % len(SCREENS)
+            print(f">> Switched to: {SCREENS[current][0]}")
+        elif result is None and _check_tap():
             current = (current + 1) % len(SCREENS)
             print(f">> Switched to: {SCREENS[current][0]}")
 
