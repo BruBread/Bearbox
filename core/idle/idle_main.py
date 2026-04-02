@@ -163,6 +163,7 @@ def run():
             print(f">> Switched to: {SCREENS[current][0]}")
 
 
+
         # Periodic internet check
         if time.time() - last_check > CHECK_EVERY:
             last_check = time.time()
