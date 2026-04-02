@@ -19,6 +19,7 @@ import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
+import network.net_utils as _net_utils
 from network.net_utils import check_tap, tapped
 
 CONFIG_PATH  = "/home/bearbox/bearbox/config.json"
@@ -167,10 +168,36 @@ def _draw_result(msg, msg2, color):
     push(img)
     time.sleep(2.5)
 
+def _draw_btn_pressed(d, F, Fs, bx, by, bw, bh, ssid, networks):
+    """Draw a single button in its pressed (highlighted) state."""
+    d.rectangle([bx, by, bx + bw, by + bh],
+                fill=(60, 0, 0), outline=R["red"])
+    # bright scanlines inside button
+    for sy in range(by + 4, by + bh - 2, 5):
+        d.line([(bx + 2, sy), (bx + bw - 2, sy)], fill=(40, 0, 0), width=1)
+    lw = F.getbbox(ssid[:20])[2]
+    lh = F.getbbox(ssid[:20])[3]
+    # glow outline
+    for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        d.text((bx + (bw - lw) // 2 + ox, by + (bh - lh) // 2 + oy),
+               ssid[:20], font=F, fill=(80, 0, 0))
+    d.text((bx + (bw - lw) // 2, by + (bh - lh) // 2),
+           ssid[:20], font=F, fill=R["white"])
+    has_pass = bool(networks.get(ssid, ""))
+    tag      = "secured" if has_pass else "open"
+    tag_col  = R["white"] if has_pass else R["red"]
+    tw2      = Fs.getbbox(tag)[2]
+    d.text((bx + (bw - tw2) // 2, by + bh - 16), tag, font=Fs, fill=tag_col)
+
 # ── Main ──────────────────────────────────────────────────────
 
 def run():
     """Returns ("connected", ssid) or ("cycle", None)"""
+
+    # Clear the tap cooldown so the first tap in this screen is never
+    # silently dropped because idle_offline just fired check_tap() to
+    # navigate here.
+    _net_utils._last_tap = 0
 
     F     = font(16, bold=True)
     Ft    = font(20, bold=True)
@@ -195,8 +222,13 @@ def run():
         by  = grid_y + row * (BTN_H + GAP)
         btn_rects.append((bx, by, BTN_W, BTN_H, ssid))
 
+    # Which button is currently in pressed-flash state (index or -1)
+    _pressed_idx       = -1
+    _pressed_until     = 0.0
+
     while True:
         pulse += 1
+        now   = time.time()
 
         img, d = new_frame(bg=R["bg"])
         for y in range(0, H, 4):
@@ -220,21 +252,25 @@ def run():
             d.text(((W - mw)  // 2, H // 2 - 14), msg,  font=F,  fill=R["dimred"])
             d.text(((W - mw2) // 2, H // 2 + 14), msg2, font=Fs, fill=R["darkred"])
         else:
-            for (bx, by, bw, bh, ssid) in btn_rects:
-                amp    = abs((pulse % 60) - 30) / 30.0
-                border = (int(50 + amp * 70), 0, 0)
-                d.rectangle([bx, by, bx + bw, by + bh],
-                            fill=R["panel"], outline=border)
-                lw = F.getbbox(ssid[:20])[2]
-                lh = F.getbbox(ssid[:20])[3]
-                d.text((bx + (bw - lw) // 2, by + (bh - lh) // 2),
-                       ssid[:20], font=F, fill=R["white"])
-                has_pass = bool(networks.get(ssid, ""))
-                tag      = "secured" if has_pass else "open"
-                tag_col  = R["dimwhite"] if has_pass else R["midred"]
-                tw2      = Fs.getbbox(tag)[2]
-                d.text((bx + (bw - tw2) // 2, by + bh - 16),
-                       tag, font=Fs, fill=tag_col)
+            for idx, (bx, by, bw, bh, ssid) in enumerate(btn_rects):
+                pressed = (idx == _pressed_idx and now < _pressed_until)
+                if pressed:
+                    _draw_btn_pressed(d, F, Fs, bx, by, bw, bh, ssid, networks)
+                else:
+                    amp    = abs((pulse % 60) - 30) / 30.0
+                    border = (int(50 + amp * 70), 0, 0)
+                    d.rectangle([bx, by, bx + bw, by + bh],
+                                fill=R["panel"], outline=border)
+                    lw = F.getbbox(ssid[:20])[2]
+                    lh = F.getbbox(ssid[:20])[3]
+                    d.text((bx + (bw - lw) // 2, by + (bh - lh) // 2),
+                           ssid[:20], font=F, fill=R["white"])
+                    has_pass = bool(networks.get(ssid, ""))
+                    tag      = "secured" if has_pass else "open"
+                    tag_col  = R["dimwhite"] if has_pass else R["midred"]
+                    tw2      = Fs.getbbox(tag)[2]
+                    d.text((bx + (bw - tw2) // 2, by + bh - 16),
+                           tag, font=Fs, fill=tag_col)
 
         # footer
         d.rectangle([0, H - 22, W, H], fill=R["panel"])
@@ -244,18 +280,34 @@ def run():
 
         push(img)
 
+        # If a button is in pressed-flash state, wait it out before acting
+        if _pressed_idx != -1 and now >= _pressed_until:
+            ssid = btn_rects[_pressed_idx][4]
+            _pressed_idx   = -1
+            _pressed_until = 0.0
+            _draw_connecting(ssid)
+            if _try_connect(ssid, networks.get(ssid, "")):
+                return "connected", ssid
+            else:
+                _draw_result("Connection failed", f'"{ssid}"', R["red"])
+                # Reset cooldown again after the long connecting animation
+                _net_utils._last_tap = 0
+            continue
+
         if check_tap():
+            tx = _net_utils._tap_x
+            ty = _net_utils._tap_y
+            print(f"[networks] tap ({tx},{ty})")
             hit = False
-            for (bx, by, bw, bh, ssid) in btn_rects:
+            for idx, (bx, by, bw, bh, ssid) in enumerate(btn_rects):
                 if tapped(bx, by, bw, bh):
-                    hit = True
-                    _draw_connecting(ssid)
-                    if _try_connect(ssid, networks.get(ssid, "")):
-                        return "connected", ssid
-                    else:
-                        _draw_result("Connection failed", f'"{ssid}"', R["red"])
+                    print(f"[networks] HIT btn {idx} '{ssid}'")
+                    hit          = True
+                    _pressed_idx   = idx
+                    _pressed_until = time.time() + 0.35
                     break
             if not hit:
+                print(f"[networks] MISS — cycle")
                 return "cycle", None
 
         time.sleep(1 / 30)
