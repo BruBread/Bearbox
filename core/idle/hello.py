@@ -327,27 +327,9 @@ def draw():
 
     pulse = (math.sin(time.time() * 3) + 1) / 2
 
-    # ── Touch handling ────────────────────────────────────────
-    # Return contract for idle_main:
-    #   True  = tapped outside button → cycle to next screen
-    #   False = tapped button → action taken, do NOT cycle
-    #   None  = no tap this frame
-    tap_result = None
-    if _state not in ("checking", "updating"):
-        if check_tap():
-            if _update_btn_rect and tapped(*_update_btn_rect):
-                # Button tap — do the action, suppress cycling
-                if _state == "available":
-                    _do_update()
-                else:
-                    request_update_check()
-                tap_result = False
-            else:
-                # Outside tap — cycle
-                tap_result = True
-
     _update_bg()
 
+    # ── Draw frame first so _update_btn_rect is always current ───
     img, d = new_frame(bg=C["bg"])
     draw_scanlines(d)
     _draw_bg(d, F)
@@ -367,7 +349,23 @@ def draw():
                font=F["tiny"], fill=C["dimblue"])
 
     push(img)
-    return tap_result
+
+    # ── Touch handling AFTER draw so _update_btn_rect is populated ──
+    # Return contract for idle_main:
+    #   True  = tapped outside button → cycle to next screen
+    #   False = tapped button → action taken, do NOT cycle
+    #   None  = no tap this frame
+    if _state not in ("checking", "updating"):
+        if check_tap():
+            if _update_btn_rect and tapped(*_update_btn_rect):
+                if _state == "available":
+                    _do_update()
+                else:
+                    request_update_check()
+                return False   # button tap — don't cycle
+            else:
+                return True    # outside tap — cycle
+    return None
 
 # ── Standalone ────────────────────────────────────────────────
 if __name__ == "__main__":
