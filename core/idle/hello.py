@@ -29,8 +29,7 @@ from network.net_utils import check_tap, tapped
 
 # ── Config ────────────────────────────────────────────────────
 BRANCH    = "main"
-REPO_PATH = "/home/bearbox/Bearbox"
-
+REPO_PATH = "/home/bearbox/bearbox"
 # ── Palette ───────────────────────────────────────────────────
 U = {
     "bg":      C["bg"],
