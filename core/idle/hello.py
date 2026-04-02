@@ -392,6 +392,7 @@ def draw():
 
     return False  # no tap — idle_main should not check either, we own the fd
 
+
 # ── Standalone ────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Update screen — Ctrl+C to stop")
