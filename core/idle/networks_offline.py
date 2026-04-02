@@ -194,9 +194,9 @@ def _draw_btn_pressed(d, F, Fs, bx, by, bw, bh, ssid, networks):
 def run():
     """Returns ("connected", ssid) or ("cycle", None)"""
 
-    # Clear the tap cooldown so the first tap in this screen is never
-    # silently dropped because idle_offline just fired check_tap() to
-    # navigate here.
+    # Drain any residual touch events left over from navigation, then
+    # reset the cooldown so the first real tap here is never dropped.
+    check_tap()
     _net_utils._last_tap = 0
 
     F     = font(16, bold=True)
@@ -290,7 +290,8 @@ def run():
                 return "connected", ssid
             else:
                 _draw_result("Connection failed", f'"{ssid}"', R["red"])
-                # Reset cooldown again after the long connecting animation
+                # Drain residual events from the long animation, then clear cooldown
+                check_tap()
                 _net_utils._last_tap = 0
             continue
 
@@ -309,6 +310,5 @@ def run():
             if not hit:
                 print(f"[networks] MISS — cycle")
                 return "cycle", None
-
 
         time.sleep(1 / 30)
