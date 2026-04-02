@@ -119,17 +119,45 @@ def request_update_check():
 
 def _run(cmd, timeout=10):
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        print(f"[update] cmd failed: {' '.join(cmd)}")
+        print(f"[update] stderr: {r.stderr}")
+        return None
     return r.stdout.strip()
 
 def _check_thread():
     global _state, _local_sha, _remote_sha, _status_msg
     _state = "checking"
     try:
-        # fetch latest refs from origin — no merge, just updates remote tracking
-        subprocess.run(
-            ["git", "-C", REPO_PATH, "fetch", "origin", BRANCH],
-            capture_output=True, timeout=15
+        # Check if repo path exists first
+        if not os.path.isdir(REPO_PATH):
+            _status_msg = f"repo not found: {REPO_PATH}"
+            _state = "idle"
+            print(f"[update] repo path doesn't exist: {REPO_PATH}")
+            return
+
+        # Check if it's a valid git repo
+        check_git = subprocess.run(
+            ["git", "-C", REPO_PATH, "rev-parse", "--git-dir"],
+            capture_output=True, text=True, timeout=5
         )
+        if check_git.returncode != 0:
+            _status_msg = "not a git repository"
+            _state = "idle"
+            print(f"[update] not a git repo: {REPO_PATH}")
+            return
+
+        # fetch latest refs from origin — no merge, just updates remote tracking
+        fetch_result = subprocess.run(
+            ["git", "-C", REPO_PATH, "fetch", "origin", BRANCH],
+            capture_output=True, text=True, timeout=15
+        )
+        if fetch_result.returncode != 0:
+            _status_msg = "fetch failed — check network"
+            _state = "idle"
+            print(f"[update] fetch failed: {fetch_result.stderr}")
+            return
+
         # local HEAD
         local  = _run(["git", "-C", REPO_PATH, "rev-parse", "HEAD"])
         # remote HEAD after fetch
