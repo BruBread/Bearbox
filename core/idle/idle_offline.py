@@ -25,6 +25,7 @@ from clock_offline    import draw as draw_clock
 from hello_offline    import draw as draw_offline
 from networks_offline import draw as draw_networks
 from network.net_utils import check_tap
+import network.net_utils as _net_utils
 import bb_portal
 
 AP_IFACE = "wlan0"
@@ -113,9 +114,15 @@ def run():
             # ── 2. True/False/None tap protocol ──────────────
             if result is True:
                 current = (current + 1) % 3
+                # Flush stale taps when entering networks (has buttons)
+                if current == 2:
+                    _net_utils._last_tap = 0
                 print(f">> Screen: {SCREEN_NAMES[current]}")
             elif result is None and check_tap():
                 current = (current + 1) % 3
+                # Flush stale taps when entering networks (has buttons)
+                if current == 2:
+                    _net_utils._last_tap = 0
                 print(f">> Screen: {SCREEN_NAMES[current]}")
 
             # ── 3. Portal connected in background? ────────────
