@@ -29,7 +29,7 @@ from network.net_utils import check_tap, tapped
 
 # ── Config ────────────────────────────────────────────────────
 BRANCH    = "main"
-REPO_PATH = "/home/bearbox/bearbox"
+REPO_PATH = "/home/bearbox/Bearbox"
 
 # ── Palette ───────────────────────────────────────────────────
 U = {
