@@ -28,13 +28,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 # ── import screens ────────────────────────────────────────────
 from clock import draw as draw_clock
-import hello as hello_module
+from hello import draw as draw_hello
 from bear  import draw as draw_bear
 # from matrix import draw as draw_matrix
 
 SCREENS = [
     ("clock", draw_clock),
-    ("hello", hello_module.draw),
+    ("hello", draw_hello),
     ("bear",  draw_bear),
     # ("matrix", draw_matrix),
 ]
@@ -156,13 +156,14 @@ def run():
         SCREENS[current][1]()
 
         if _check_tap():
-            # reset hello state when cycling away from it
-            if SCREENS[current][0] == "hello":
-                hello_module.reset()
             current = (current + 1) % len(SCREENS)
             print(f">> Switched to: {SCREENS[current][0]}")
-
-
+            if SCREENS[current][0] == "hello":
+                try:
+                    from hello import request_update_check
+                    request_update_check()
+                except Exception:
+                    pass
 
         # Periodic internet check
         if time.time() - last_check > CHECK_EVERY:

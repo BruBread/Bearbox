@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-BearBox Idle — HELLO LOSER Screensaver
+BearBox Idle — HELLO / NO MODULES Screensaver
 - Giant centered text with glitch/flicker effect
 - Hacking terminal noise in background
 - Blue and white color scheme
 
-If a newer commit exists on GitHub:
-  - Shows a "PRESS HERE TO UPDATE" button where LINE2 normally sits
-  - Tapping it runs `git pull` and restarts the bearbox service
+Update check:
+  - Runs once when you first land on this screen (called from idle_main)
+  - Shows a pulsing "PRESS HERE TO UPDATE" button if a new commit exists
+  - Tapping it runs git pull and restarts bearbox
 """
 
 import time
@@ -28,39 +29,34 @@ from network.net_utils import check_tap, tapped
 # ║              EDIT THIS BLOCK                 ║
 # ╚══════════════════════════════════════════════╝
 
-LINE1      = "NO MODULES"        # first line text
-LINE2      = "DETECTED"          # second line text (shown when up-to-date)
-CREDIT     = "-FD"               # credit text
+LINE1      = "NO MODULES"
+LINE2      = "DETECTED"
+CREDIT     = "-FD"
 
-MAIN_SIZE   = 90             # main text font size
-CREDIT_SIZE = 18             # credit font size
-BG_SIZE     = 10             # background terminal text size
+MAIN_SIZE   = 90
+CREDIT_SIZE = 18
+BG_SIZE     = 10
 
-# ── Position (0.5 = center, 0.0 = left/top, 1.0 = right/bottom)
-TEXT_X      = 0.5            # horizontal position (0.0 - 1.0)
-TEXT_Y      = 0.4            # vertical position (0.0 - 1.0)
-CREDIT_X    = 0.97           # credit horizontal position
-CREDIT_Y    = 0.92           # credit vertical position
-LINE_GAP    = 8              # gap between LINE1 and LINE2
+TEXT_X      = 0.5
+TEXT_Y      = 0.4
+CREDIT_X    = 0.97
+CREDIT_Y    = 0.92
+LINE_GAP    = 8
 
-# ── Glitch settings
-GLITCH_CHANCE    = 0.08      # chance of glitch per frame
-GLITCH_INTENSITY = 6         # max pixel offset during glitch
-FLICKER_CHANCE   = 0.04      # chance of full flicker per frame
+GLITCH_CHANCE    = 0.08
+GLITCH_INTENSITY = 6
+FLICKER_CHANCE   = 0.04
 
-# ── Background terminal settings
-BG_COLS     = 12             # number of background columns
+BG_COLS     = 12
 
-# ── Update check settings
 REPO_OWNER  = "BruBread"
-REPO_NAME   = "Bearbox"
+REPO_NAME   = "Bearbox"       # case-sensitive — match exactly as on GitHub
 BRANCH      = "main"
 REPO_PATH   = "/home/bearbox/bearbox"
 
 # ╔══════════════════════════════════════════════╗
 # ║           DON'T EDIT BELOW HERE              ║
 # ╚══════════════════════════════════════════════╝
-
 
 _F = {}
 
@@ -146,13 +142,16 @@ def _update_glitch():
             _glitch_active = False
 
 # ── UPDATE CHECK ──────────────────────────────────────────────
-_update_available   = False
-_update_checking    = False
-_update_in_progress = False
-_update_btn_rect    = None   # (x, y, w, h) — set each frame so tapped() works
+_update_available    = False
+_update_checking     = False
+_update_in_progress  = False
+_update_check_requested = True   # check immediately on first load
+_update_btn_rect     = None
 
-# Tracks whether we've kicked off the check for this screen visit
-_checked_this_visit = False
+def request_update_check():
+    """Call this from idle_main when switching to this screen."""
+    global _update_check_requested
+    _update_check_requested = True
 
 def _get_local_sha():
     try:
@@ -161,19 +160,29 @@ def _get_local_sha():
             capture_output=True, text=True, timeout=5
         )
         return r.stdout.strip()
-    except Exception:
+    except Exception as e:
+        print(f"[hello] local sha error: {e}")
         return None
 
 def _get_remote_sha():
     try:
-        url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{BRANCH}"
+        url = (f"https://api.github.com/repos/"
+               f"{REPO_OWNER}/{REPO_NAME}/commits/{BRANCH}")
         r = subprocess.run(
-            ["curl", "-sf", "--max-time", "6", url],
-            capture_output=True, text=True, timeout=8
+            ["curl", "-sf", "--max-time", "8",
+             "-H", "Accept: application/vnd.github.v3+json",
+             url],
+            capture_output=True, text=True, timeout=12
         )
+        if not r.stdout.strip():
+            print(f"[hello] GitHub API empty response")
+            return None
         data = json.loads(r.stdout)
-        return data.get("sha", "")
-    except Exception:
+        sha  = data.get("sha", "")
+        print(f"[hello] remote sha: {sha[:10]}...")
+        return sha
+    except Exception as e:
+        print(f"[hello] remote sha error: {e}")
         return None
 
 def _check_update_thread():
@@ -182,29 +191,28 @@ def _check_update_thread():
     try:
         local  = _get_local_sha()
         remote = _get_remote_sha()
+        print(f"[hello] local={local[:10] if local else None} remote={remote[:10] if remote else None}")
         if local and remote and local != remote:
             _update_available = True
+            print("[hello] Update available!")
         else:
             _update_available = False
-    except Exception:
-        pass
+            print("[hello] Up to date")
+    except Exception as e:
+        print(f"[hello] update check error: {e}")
     _update_checking = False
 
-def trigger_update_check():
-    """
-    Call this once when the screen becomes active.
-    Kicks off a background thread to check for updates.
-    Resets state so a fresh check always happens on each visit.
-    """
-    global _update_available, _update_checking, _checked_this_visit
-    if _update_checking or _update_in_progress:
+def _maybe_check_update():
+    global _update_check_requested
+    if _update_in_progress or _update_checking:
         return
-    _update_available   = False   # reset — show clean state while checking
-    _checked_this_visit = True
+    if not _update_check_requested:
+        return
+    _update_check_requested = False
+    print("[hello] Checking for updates...")
     threading.Thread(target=_check_update_thread, daemon=True).start()
 
 def _do_update():
-    """git pull in background, then restart the service."""
     global _update_in_progress, _update_available
 
     _update_in_progress = True
@@ -216,8 +224,8 @@ def _do_update():
                 ["git", "-C", REPO_PATH, "pull", "--ff-only"],
                 capture_output=True, timeout=30
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[hello] pull error: {e}")
         _update_available   = False
         _update_in_progress = False
         subprocess.Popen(["sudo", "systemctl", "restart", "bearbox"])
@@ -230,11 +238,11 @@ def _draw_main(d, F):
     def tw(t): return F["main"].getbbox(t)[2] - F["main"].getbbox(t)[0]
     def th(t): return F["main"].getbbox(t)[3] - F["main"].getbbox(t)[1]
 
-    l1_w = tw(LINE1)
-    l1_h = th(LINE1)
-    l2_h = th(LINE2)
+    l1_w    = tw(LINE1)
+    l1_h    = th(LINE1)
+    l2_h    = th(LINE2)
+    total_h = l1_h + LINE_GAP + l2_h
 
-    total_h  = l1_h + LINE_GAP + l2_h
     center_x = int(W * TEXT_X)
     center_y = int(H * TEXT_Y)
 
@@ -265,11 +273,11 @@ def _draw_main(d, F):
         _draw_line2(d, F, l2_y)
 
 def _draw_checking(d, F, y):
-    """Small 'checking...' indicator while the update thread runs."""
-    dots  = "." * (int(time.time() * 2) % 4)
-    label = f"checking{dots}"
-    lw    = F["sub"].getbbox(label)[2] - F["sub"].getbbox(label)[0]
-    d.text(((W - lw) // 2, y + 10), label, font=F["sub"], fill=C["dimblue"])
+    """Small 'checking...' indicator while update check is in progress."""
+    dots = "." * (int(time.time() * 2) % 4)
+    msg  = f"checking{dots}"
+    mw   = F["sub"].getbbox(msg)[2]
+    d.text(((W - mw) // 2, y + 10), msg, font=F["sub"], fill=C["dimblue"])
 
 def _draw_line2(d, F, y):
     def tw(t): return F["main"].getbbox(t)[2] - F["main"].getbbox(t)[0]
@@ -282,7 +290,7 @@ def _draw_line2(d, F, y):
     if _flicker_active:
         col2 = (0, 60, 120)
     elif _glitch_active:
-        col2 = _glitch_color
+        col2  = _glitch_color
         l2_x += _glitch_offset[0]
         y    += _glitch_offset[1]
         d.text((l2_x - 3, y - 1), LINE2, font=F["main"], fill=(0, 30, 80))
@@ -298,7 +306,6 @@ def _draw_line2(d, F, y):
            fill=line_col, width=2)
 
 def _draw_update_btn(d, F, y):
-    """Pulsing update button — sits exactly where LINE2 would be."""
     global _update_btn_rect
 
     label = "PRESS HERE TO UPDATE" if not _update_in_progress else "UPDATING..."
@@ -308,21 +315,17 @@ def _draw_update_btn(d, F, y):
     btn_h = 52
     btn_x = (W - btn_w) // 2
 
-    # Pulsing outline — matches hello.py blue palette
     pulse       = (math.sin(time.time() * 3) + 1) / 2
     outline_col = (0, int(100 + pulse * 80), int(200 + pulse * 55))
 
-    # Panel background
     d.rectangle([btn_x, y, btn_x + btn_w, y + btn_h],
                 fill=C["panel"], outline=outline_col)
 
-    # Faint horizontal scan stripes inside
     stripe_col = (0, int(20 + pulse * 10), int(40 + pulse * 25))
     for sy in range(y + 5, y + btn_h - 4, 6):
         d.line([(btn_x + 2, sy), (btn_x + btn_w - 2, sy)],
                fill=stripe_col, width=1)
 
-    # Label — glow + main text
     lw = F["btn"].getbbox(label)[2] - F["btn"].getbbox(label)[0]
     lh = F["btn"].getbbox(label)[3] - F["btn"].getbbox(label)[1]
     lx = btn_x + (btn_w - lw) // 2
@@ -334,12 +337,10 @@ def _draw_update_btn(d, F, y):
     text_col = outline_col if not _update_in_progress else C["dimwhite"]
     d.text((lx, ly), label, font=F["btn"], fill=text_col)
 
-    # Sub-label
     sw = F["sub"].getbbox(sub)[2] - F["sub"].getbbox(sub)[0]
     sx = (W - sw) // 2
     d.text((sx, y + btn_h + 6), sub, font=F["sub"], fill=C["dimblue"])
 
-    # Underline
     d.line([(btn_x, y + btn_h + 22), (btn_x + btn_w, y + btn_h + 22)],
            fill=C["dimblue"], width=2)
 
@@ -357,7 +358,7 @@ _tick      = 0
 _bg_inited = False
 
 def draw():
-    global _tick, _bg_inited, _checked_this_visit
+    global _tick, _bg_inited
     _tick += 1
 
     F = _fonts()
@@ -365,11 +366,8 @@ def draw():
         _init_bg(F)
         _bg_inited = True
 
-    # Kick off update check once on first draw (i.e. screen entry)
-    if not _checked_this_visit:
-        trigger_update_check()
+    _maybe_check_update()
 
-    # Handle tap on update button
     if _update_available and not _update_in_progress:
         if check_tap() and _update_btn_rect:
             if tapped(*_update_btn_rect):
@@ -395,19 +393,9 @@ def draw():
 
     push(img)
 
-def reset():
-    """
-    Call this whenever the idle loop switches AWAY from this screen
-    so the next visit always triggers a fresh check.
-    """
-
-    global _checked_this_visit, _update_available
-    _checked_this_visit = False
-    _update_available   = False
-
 # ── STANDALONE ────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Running HELLO LOSER — Ctrl+C to stop")
+    print("Running HELLO — Ctrl+C to stop")
     while True:
         draw()
         time.sleep(1/30)
