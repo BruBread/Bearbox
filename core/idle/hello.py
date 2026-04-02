@@ -25,6 +25,7 @@ import threading
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, draw_scanlines, font, C, W, H
 from network.net_utils import check_tap, tapped
+import network.net_utils as _net_utils  # for debug tap coords
 
 # ── Config ────────────────────────────────────────────────────
 BRANCH    = "main"
@@ -225,9 +226,21 @@ def _draw_action_btn(d, F, label, pulse, y=None):
     btn_h = 52
     btn_x = 24
     btn_y = y if y is not None else H - btn_h - 28
-    outline = (0, int(100 + pulse * 80), int(180 + pulse * 75))
+
+    pressed = time.time() < _btn_pressed_until
+
+    if pressed:
+        # Bright white flash fill to confirm the press visually
+        fill_col   = (20, 60, 100)
+        outline    = C["white"]
+        text_col   = C["white"]
+    else:
+        fill_col   = C["panel"]
+        outline    = (0, int(100 + pulse * 80), int(180 + pulse * 75))
+        text_col   = outline
+
     d.rectangle([btn_x, btn_y, btn_x + btn_w, btn_y + btn_h],
-                fill=C["panel"], outline=outline)
+                fill=fill_col, outline=outline)
     for sy in range(btn_y + 6, btn_y + btn_h - 4, 6):
         d.line([(btn_x + 2, sy), (btn_x + btn_w - 2, sy)],
                fill=(0, int(15 + pulse * 12), int(30 + pulse * 20)), width=1)
@@ -237,7 +250,7 @@ def _draw_action_btn(d, F, label, pulse, y=None):
     ly = btn_y + (btn_h - lh) // 2
     for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
         d.text((lx + ox, ly + oy), label, font=F["btn"], fill=(0, 20, 50))
-    d.text((lx, ly), label, font=F["btn"], fill=outline)
+    d.text((lx, ly), label, font=F["btn"], fill=text_col)
     _update_btn_rect = (btn_x, btn_y, btn_w, btn_h)
     return _update_btn_rect
 
@@ -357,13 +370,19 @@ def draw():
     #   None  = no tap this frame
     if _state not in ("checking", "updating"):
         if check_tap():
+            tx, ty = _net_utils._tap_x, _net_utils._tap_y
+            print(f"[hello] tap at ({tx},{ty})  btn_rect={_update_btn_rect}  state={_state}")
             if _update_btn_rect and tapped(*_update_btn_rect):
+                print(f"[hello] HIT button")
+                global _btn_pressed_until
+                _btn_pressed_until = time.time() + 0.35  # flash for 350ms
                 if _state == "available":
                     _do_update()
                 else:
                     request_update_check()
                 return False   # button tap — don't cycle
             else:
+                print(f"[hello] MISS button — cycling")
                 return True    # outside tap — cycle
     return None
 
