@@ -21,7 +21,6 @@ import os
 import sys
 import time
 import threading
-import select
 import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -60,32 +59,11 @@ def _is_connected():
     return is_connected()
 
 # ── touch ─────────────────────────────────────────────────────
-TOUCH_DEV    = "/dev/input/event0"
-TAP_COOLDOWN = 1.2
-_touch_fd    = None
-_last_tap    = 0
-
-def _check_tap():
-    global _touch_fd, _last_tap
-    if not os.path.exists(TOUCH_DEV):
-        return False
-    try:
-        if _touch_fd is None:
-            _touch_fd = open(TOUCH_DEV, "rb")
-        r, _, _ = select.select([_touch_fd], [], [], 0)
-        if r:
-            while True:
-                r2, _, _ = select.select([_touch_fd], [], [], 0)
-                if not r2:
-                    break
-                _touch_fd.read(16)
-            now = time.time()
-            if now - _last_tap > TAP_COOLDOWN:
-                _last_tap = now
-                return True
-    except Exception:
-        _touch_fd = None
-    return False
+# Use net_utils.check_tap() as the single tap reader for the whole process.
+# This keeps one fd open, parses coordinates, and lets screens that use
+# tapped() (like hello.py) read accurate _tap_x/_tap_y without fighting
+# over a second fd that discards coordinate data.
+from network.net_utils import check_tap as _check_tap
 
 # ── boot sequence ─────────────────────────────────────────────
 
@@ -153,14 +131,14 @@ def run():
     print(f"BearBox idle — tap to cycle | screen: {SCREENS[current][0]}")
 
     while True:
-        # draw() may return True to request a screen cycle (e.g. update screen
-        # tapped outside its button). If it returns True the screen already
-        # consumed the tap, so we skip the global _check_tap() to avoid a
-        # double-cycle. For screens that return None/False we fall back to the
-        # normal tap-anywhere-to-cycle behaviour.
+        # draw() returns True when the screen itself consumed a tap and
+        # wants to cycle (e.g. hello.py tapped outside the button).
+        # For all other screens it returns None, so we fall back to
+        # _check_tap() — which is now net_utils.check_tap(), the same fd
+        # that coordinate-aware screens use. One fd, no event stealing.
         should_cycle = SCREENS[current][1]()
 
-        if should_cycle or (not should_cycle and _check_tap()):
+        if should_cycle or _check_tap():
             current = (current + 1) % len(SCREENS)
             print(f">> Switched to: {SCREENS[current][0]}")
 
