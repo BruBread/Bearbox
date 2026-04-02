@@ -358,25 +358,34 @@ def draw():
     # ── Touch handling AFTER draw so _update_btn_rect is populated ──
     # Return contract for idle_main:
     #   True  = tapped outside button → cycle to next screen
-    #   False = tapped button → action taken, do NOT cycle
-    #   None  = no tap this frame
-    if _state not in ("checking", "updating"):
-        if check_tap():
-            tx, ty = _net_utils._tap_x, _net_utils._tap_y
-            print(f"[hello] tap at ({tx},{ty})  btn_rect={_update_btn_rect}  state={_state}")
-            if _update_btn_rect and tapped(*_update_btn_rect):
-                print(f"[hello] HIT button")
-                global _btn_pressed_until
-                _btn_pressed_until = time.time() + 0.35  # flash for 350ms
-                if _state == "available":
-                    _do_update()
-                else:
-                    request_update_check()
-                return False   # button tap — don't cycle
+    #   False = tapped the button, OR screen is busy (checking/updating)
+    #           — either way idle_main must NOT call _check_tap() again
+    #   None  = never returned; hello always owns the tap decision
+
+    # Always drain the tap fd so idle_main never gets a stale event from us.
+    # During checking/updating we just consume and discard.
+    tapped_now = check_tap()
+
+    if _state in ("checking", "updating"):
+        return False  # busy — block idle_main from cycling
+
+    if tapped_now:
+        tx, ty = _net_utils._tap_x, _net_utils._tap_y
+        print(f"[hello] tap at ({tx},{ty})  btn_rect={_update_btn_rect}  state={_state}")
+        if _update_btn_rect and tapped(*_update_btn_rect):
+            print(f"[hello] HIT button")
+            global _btn_pressed_until
+            _btn_pressed_until = time.time() + 0.35
+            if _state == "available":
+                _do_update()
             else:
-                print(f"[hello] MISS button — cycling")
-                return True    # outside tap — cycle
-    return None
+                request_update_check()
+            return False  # button hit — don't cycle
+        else:
+            print(f"[hello] MISS — cycling")
+            return True   # outside tap — cycle
+
+    return False  # no tap — idle_main should not check either, we own the fd
 
 # ── Standalone ────────────────────────────────────────────────
 if __name__ == "__main__":
