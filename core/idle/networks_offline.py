@@ -1,33 +1,30 @@
 #!/usr/bin/env python3
 """
-BearBox Offline — Saved Networks Screen
+BearBox Offline — WiFi Portal QR Screen
 
-No adapter required. Connects directly on wlan0.
-Flow:
-  - Show saved networks immediately, no hardware checks
-  - Tap a network → tear down AP → attempt connect on wlan0
-  - Success → return ("connected", ssid) → idle_offline handles the rest
-  - Fail    → restore AP → show error → stay on screen
-  - Tap outside any button → return ("cycle", None) → go back to clock
+Replaces the old button grid. Shows a red-themed QR code pointing to
+bearbox.local so the user can scan it with their phone and configure
+wifi through the web portal instead.
+
+Returns True on tap (cycle back to clock) or None (no tap).
 """
 
 import os
 import sys
 import time
-import json
-import subprocess
+import math
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, font, W, H
 import network.net_utils as _net_utils
-from network.net_utils import check_tap, tapped
+from network.net_utils import check_tap
 
-CONFIG_PATH  = "/home/bearbox/bearbox/config.json"
-MAX_NETWORKS = 4
-IFACE        = "wlan0"
-AP_IP        = "10.0.0.1"
-AP_SSID      = "BearBox-AP"
-AP_PASS      = "Bearbox123"
+import qrcode
+from PIL import Image
+
+PORTAL_URL = "http://bearbox.local"
+AP_SSID    = "BearBox-AP"
+AP_IP      = "10.0.0.1"
 
 R = {
     "bg":       (12,  0,   0),
@@ -40,275 +37,167 @@ R = {
     "dimwhite": (140, 80,  80),
 }
 
-# ── Helpers ───────────────────────────────────────────────────
+# ── QR code — generated once, cached ──────────────────────────
+_qr_img   = None
+_qr_size  = 0
 
-def _run(cmd):
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
-
-def _load_saved_networks():
-    try:
-        with open(CONFIG_PATH) as f:
-            cfg = json.load(f)
-        networks     = cfg.get("saved_networks", {})
-        hotspot_ssid = cfg.get("hotspot_ssid", "")
-        hotspot_pass = cfg.get("hotspot_password", "")
-        if hotspot_ssid and hotspot_ssid not in networks:
-            networks[hotspot_ssid] = hotspot_pass
-        return networks
-    except Exception:
-        return {}
-
-def _teardown_ap():
-    """Bring down the offline AP so wlan0 is free to connect."""
-    _run("sudo pkill hostapd 2>/dev/null")
-    _run("sudo pkill dnsmasq 2>/dev/null")
-    _run(f"sudo ip addr flush dev {IFACE} 2>/dev/null")
-    _run(f"nmcli device set {IFACE} managed yes 2>/dev/null")
-    time.sleep(0.5)
-
-def _restore_ap():
-    """Spin the AP back up after a failed connect attempt."""
-    _run(f"nmcli device set {IFACE} managed no 2>/dev/null")
-    _run(f"sudo ip link set {IFACE} up")
-    _run(f"sudo ip addr add {AP_IP}/24 dev {IFACE} 2>/dev/null")
-    with open("/tmp/bb_offline_hostapd.conf", "w") as f:
-        f.write(f"interface={IFACE}\ndriver=nl80211\nssid={AP_SSID}\n"
-                f"hw_mode=g\nchannel=6\nwmm_enabled=0\nmacaddr_acl=0\n"
-                f"auth_algs=1\nignore_broadcast_ssid=0\nwpa=2\n"
-                f"wpa_passphrase={AP_PASS}\nwpa_key_mgmt=WPA-PSK\n"
-                f"wpa_pairwise=TKIP\nrsn_pairwise=CCMP\n")
-    with open("/tmp/bb_offline_dnsmasq.conf", "w") as f:
-        f.write(f"interface={IFACE}\n"
-                f"dhcp-range=10.0.0.10,10.0.0.50,255.255.255.0,24h\n"
-                f"dhcp-option=3,{AP_IP}\ndhcp-option=6,8.8.8.8\n")
-    _run("sudo hostapd /tmp/bb_offline_hostapd.conf -B 2>/dev/null")
-    time.sleep(1)
-    _run("sudo dnsmasq --conf-file=/tmp/bb_offline_dnsmasq.conf 2>/dev/null")
-
-def _try_connect(ssid, password):
+def _make_qr(target_size):
     """
-    Tear down AP, attempt to connect wlan0 to ssid.
-    Returns True on success, restores AP on failure.
+    Build a QR code image with the red-on-dark palette to match
+    the offline aesthetic. Returned as a PIL RGBA image.
     """
-    _teardown_ap()
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=4,
+        border=2,
+    )
+    qr.add_data(PORTAL_URL)
+    qr.make(fit=True)
 
-    psk_line = f'psk="{password}"' if password else "key_mgmt=NONE"
-    wpa = (f"ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\n"
-           f"update_config=1\nnetwork={{\n"
-           f"    ssid=\"{ssid}\"\n    {psk_line}\n    priority=10\n}}\n")
-    with open("/tmp/bb_saved.conf", "w") as f:
-        f.write(wpa)
+    # dark module = red, light module = near-black background
+    img = qr.make_image(
+        image_factory=qrcode.image.pil.PilImage,
+        fill_color=(220, 30, 30),   # dark modules — red
+        back_color=(18,  0,  0),    # light modules — near-black
+    ).convert("RGBA")
 
-    _run("sudo pkill wpa_supplicant 2>/dev/null")
-    time.sleep(0.5)
-    _run(f"sudo ip link set {IFACE} up")
-    _run(f"sudo wpa_supplicant -B -i {IFACE} -c /tmp/bb_saved.conf 2>/dev/null")
+    # Resize to target, keeping pixel-perfect scaling
+    sz  = target_size
+    img = img.resize((sz, sz), Image.NEAREST)
+    return img
 
-    # Poll for association (up to 10s)
-    deadline = time.time() + 10
-    while time.time() < deadline:
-        if _run("iwgetid -r 2>/dev/null"):
-            break
-        time.sleep(0.5)
+# ── fonts ──────────────────────────────────────────────────────
+_F = {}
+def _fonts():
+    if not _F:
+        _F["title"]  = font(18, bold=True)
+        _F["body"]   = font(13, bold=True)
+        _F["small"]  = font(11)
+        _F["tiny"]   = font(10)
+    return _F
 
-    # Request DHCP
-    _run(f"sudo dhcpcd {IFACE} 2>/dev/null || sudo dhclient {IFACE} 2>/dev/null")
+# ── glitch state ───────────────────────────────────────────────
+import random
+_glitch_active  = False
+_glitch_timer   = 0.0
+_glitch_offset  = (0, 0)
 
-    # Poll for IP + internet (up to 5s)
-    deadline2 = time.time() + 5
-    while time.time() < deadline2:
-        result = _run(f"ip -4 addr show {IFACE}")
-        if "inet " in result:
-            r = subprocess.run("ping -c 1 -W 2 8.8.8.8",
-                               shell=True, capture_output=True)
-            if r.returncode == 0:
-                return True
-        time.sleep(0.5)
+def _update_glitch():
+    global _glitch_active, _glitch_timer, _glitch_offset
+    now = time.time()
+    if not _glitch_active:
+        if random.random() < 0.015:
+            _glitch_active = True
+            _glitch_timer  = now
+            _glitch_offset = (
+                random.randint(-3, 3),
+                random.randint(-2, 2),
+            )
+    else:
+        if now - _glitch_timer > random.uniform(0.04, 0.12):
+            _glitch_active = False
 
-    # Failed — restore AP
-    _run("sudo pkill wpa_supplicant 2>/dev/null")
-    _restore_ap()
-    return False
+# ── main draw — called by idle_offline 30x/sec ────────────────
+_bg_inited = False
+_tick      = 0
 
-# ── Drawing ───────────────────────────────────────────────────
+def draw():
+    """
+    Returns True  — tap detected, idle_offline should cycle
+            None  — no tap this frame
+    """
+    global _qr_img, _qr_size, _bg_inited, _tick
 
-def _draw_connecting(ssid):
-    Fs   = font(13)
-    Fbig = font(40, bold=True)
-    dots = ["◐", "◓", "◑", "◒"]
-    # runs for max 18s to cover _try_connect's full timeout window
-    start = time.time()
-    while time.time() - start < 18:
-        img, d = new_frame(bg=R["bg"])
-        for y in range(0, H, 4):
-            d.line([(0, y), (W, y)], fill=(18, 0, 0))
-        spin = dots[int(time.time() * 4) % 4]
-        sw   = Fbig.getbbox(spin)[2]
-        d.text(((W - sw) // 2, H // 2 - 50), spin, font=Fbig, fill=R["red"])
-        for i, (txt, col) in enumerate([
-            ("Connecting...",  R["dimwhite"]),
-            (f'"{ssid}"',      R["white"]),
-            (f"via {IFACE}",   R["dimred"]),
-        ]):
-            tw = Fs.getbbox(txt)[2]
-            d.text(((W - tw) // 2, H // 2 + 10 + i * 18), txt, font=Fs, fill=col)
-        push(img)
-        time.sleep(1 / 15)
+    F     = _fonts()
+    _tick += 1
 
-def _draw_result(msg, msg2, color):
-    F  = font(16, bold=True)
-    Fs = font(13)
+    # QR size: square, centered, leaving room for header + footer text
+    HEADER_H = 48
+    FOOTER_H = 36
+    QR_SIZE  = min(W, H - HEADER_H - FOOTER_H) - 16
+    QR_SIZE  = (QR_SIZE // 4) * 4  # keep divisible by box_size
+
+    if _qr_img is None or _qr_size != QR_SIZE:
+        _qr_img  = _make_qr(QR_SIZE)
+        _qr_size = QR_SIZE
+
+    _update_glitch()
+    pulse = (math.sin(time.time() * 2.5) + 1) / 2   # 0→1
+
     img, d = new_frame(bg=R["bg"])
+
+    # scanlines
     for y in range(0, H, 4):
         d.line([(0, y), (W, y)], fill=(18, 0, 0))
-    mw  = F.getbbox(msg)[2]
-    mw2 = Fs.getbbox(msg2)[2]
-    d.text(((W - mw)  // 2, H // 2 - 20), msg,  font=F,  fill=color)
-    d.text(((W - mw2) // 2, H // 2 + 10), msg2, font=Fs, fill=R["dimwhite"])
-    push(img)
-    time.sleep(2.5)
 
-def _draw_btn_pressed(d, F, Fs, bx, by, bw, bh, ssid, networks):
-    """Draw a single button in its pressed (highlighted) state."""
-    d.rectangle([bx, by, bx + bw, by + bh],
-                fill=(60, 0, 0), outline=R["red"])
-    # bright scanlines inside button
-    for sy in range(by + 4, by + bh - 2, 5):
-        d.line([(bx + 2, sy), (bx + bw - 2, sy)], fill=(40, 0, 0), width=1)
-    lw = F.getbbox(ssid[:20])[2]
-    lh = F.getbbox(ssid[:20])[3]
-    # glow outline
+    # occasional glitch scan lines
+    if _glitch_active and random.random() < 0.35:
+        for _ in range(random.randint(1, 2)):
+            gy  = random.randint(0, H)
+            gx  = random.randint(0, W // 2)
+            gw  = random.randint(15, 80)
+            d.line([(gx, gy), (gx + gw, gy)],
+                   fill=(random.randint(80, 200), 0, 0), width=1)
+
+    # ── header ────────────────────────────────────────────────
+    d.rectangle([0, 0, W, HEADER_H], fill=R["panel"])
+    d.line([(0, HEADER_H), (W, HEADER_H)], fill=R["dimred"], width=1)
+
+    title = "WIFI SETUP"
+    tw    = F["title"].getbbox(title)[2]
+    glow  = (int(120 + pulse * 60), 0, 0)
     for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-        d.text((bx + (bw - lw) // 2 + ox, by + (bh - lh) // 2 + oy),
-               ssid[:20], font=F, fill=(80, 0, 0))
-    d.text((bx + (bw - lw) // 2, by + (bh - lh) // 2),
-           ssid[:20], font=F, fill=R["white"])
-    has_pass = bool(networks.get(ssid, ""))
-    tag      = "secured" if has_pass else "open"
-    tag_col  = R["white"] if has_pass else R["red"]
-    tw2      = Fs.getbbox(tag)[2]
-    d.text((bx + (bw - tw2) // 2, by + bh - 16), tag, font=Fs, fill=tag_col)
+        d.text(((W - tw) // 2 + ox, 8 + oy), title, font=F["title"], fill=glow)
+    d.text(((W - tw) // 2, 8), title, font=F["title"], fill=R["red"])
 
-# ── Main ──────────────────────────────────────────────────────
+    sub  = f"connect to  {AP_SSID}  then scan"
+    sw   = F["small"].getbbox(sub)[2]
+    d.text(((W - sw) // 2, 30), sub, font=F["small"], fill=R["dimwhite"])
 
-def run():
-    """Returns ("connected", ssid) or ("cycle", None)"""
+    # ── QR code ───────────────────────────────────────────────
+    qr_x = (W - QR_SIZE) // 2
+    qr_y = HEADER_H + (H - HEADER_H - FOOTER_H - QR_SIZE) // 2
 
-    # Drain any residual touch events left over from navigation, then
-    # reset the cooldown so the first real tap here is never dropped.
-    check_tap()
-    _net_utils._last_tap = 0
+    # glitch offset on the QR block
+    ox = _glitch_offset[0] if _glitch_active else 0
+    oy = _glitch_offset[1] if _glitch_active else 0
 
-    F     = font(16, bold=True)
-    Ft    = font(20, bold=True)
-    Fs    = font(11)
-    pulse = 0
+    # thin pulsing border around QR
+    border_col = (int(40 + pulse * 50), 0, 0)
+    d.rectangle(
+        [qr_x - 3 + ox, qr_y - 3 + oy,
+         qr_x + QR_SIZE + 3 + ox, qr_y + QR_SIZE + 3 + oy],
+        outline=border_col
+    )
 
-    networks = _load_saved_networks()
-    ssids    = list(networks.keys())[:MAX_NETWORKS]
+    img.paste(_qr_img, (qr_x + ox, qr_y + oy))
 
-    BTN_W  = 210
-    BTN_H  = 60
-    GAP    = 10
-    grid_w = BTN_W * 2 + GAP
-    grid_x = (W - grid_w) // 2
-    grid_y = 62
+    # ── footer ────────────────────────────────────────────────
+    footer_y = H - FOOTER_H
+    d.rectangle([0, footer_y, W, H], fill=R["panel"])
+    d.line([(0, footer_y), (W, footer_y)], fill=R["dimred"], width=1)
 
-    btn_rects = []
-    for i, ssid in enumerate(ssids):
-        col = i % 2
-        row = i // 2
-        bx  = grid_x + col * (BTN_W + GAP)
-        by  = grid_y + row * (BTN_H + GAP)
-        btn_rects.append((bx, by, BTN_W, BTN_H, ssid))
+    url_col = (int(160 + pulse * 95), int(pulse * 20), int(pulse * 20))
+    uw = F["body"].getbbox(PORTAL_URL)[2]
+    d.text(((W - uw) // 2, footer_y + 5),
+           PORTAL_URL, font=F["body"], fill=url_col)
 
-    # Which button is currently in pressed-flash state (index or -1)
-    _pressed_idx       = -1
-    _pressed_until     = 0.0
+    hint  = "tap to go back"
+    hw    = F["tiny"].getbbox(hint)[2]
+    d.text(((W - hw) // 2, footer_y + 22),
+           hint, font=F["tiny"], fill=R["dimred"])
 
+    push(img)
+
+    # tap → cycle back
+    if check_tap():
+        return True
+    return None
+
+
+if __name__ == "__main__":
+    print("QR screen — Ctrl+C to stop")
     while True:
-        pulse += 1
-        now   = time.time()
-
-        img, d = new_frame(bg=R["bg"])
-        for y in range(0, H, 4):
-            d.line([(0, y), (W, y)], fill=(18, 0, 0))
-
-        # header
-        d.rectangle([0, 0, W, 52], fill=R["panel"])
-        d.line([(0, 52), (W, 52)], fill=R["dimred"], width=1)
-        title = "SAVED NETWORKS"
-        tw    = Ft.getbbox(title)[2]
-        d.text(((W - tw) // 2, 8),  title, font=Ft, fill=R["red"])
-        sub   = "tap to connect  •  tap outside to go back"
-        sw    = Fs.getbbox(sub)[2]
-        d.text(((W - sw) // 2, 34), sub,   font=Fs, fill=R["dimred"])
-
-        if not ssids:
-            msg  = "No saved networks found"
-            msg2 = "SSH in and run: bbsave"
-            mw   = F.getbbox(msg)[2]
-            mw2  = Fs.getbbox(msg2)[2]
-            d.text(((W - mw)  // 2, H // 2 - 14), msg,  font=F,  fill=R["dimred"])
-            d.text(((W - mw2) // 2, H // 2 + 14), msg2, font=Fs, fill=R["darkred"])
-        else:
-            for idx, (bx, by, bw, bh, ssid) in enumerate(btn_rects):
-                pressed = (idx == _pressed_idx and now < _pressed_until)
-                if pressed:
-                    _draw_btn_pressed(d, F, Fs, bx, by, bw, bh, ssid, networks)
-                else:
-                    amp    = abs((pulse % 60) - 30) / 30.0
-                    border = (int(50 + amp * 70), 0, 0)
-                    d.rectangle([bx, by, bx + bw, by + bh],
-                                fill=R["panel"], outline=border)
-                    lw = F.getbbox(ssid[:20])[2]
-                    lh = F.getbbox(ssid[:20])[3]
-                    d.text((bx + (bw - lw) // 2, by + (bh - lh) // 2),
-                           ssid[:20], font=F, fill=R["white"])
-                    has_pass = bool(networks.get(ssid, ""))
-                    tag      = "secured" if has_pass else "open"
-                    tag_col  = R["dimwhite"] if has_pass else R["midred"]
-                    tw2      = Fs.getbbox(tag)[2]
-                    d.text((bx + (bw - tw2) // 2, by + bh - 16),
-                           tag, font=Fs, fill=tag_col)
-
-        # footer
-        d.rectangle([0, H - 22, W, H], fill=R["panel"])
-        hint = f"AP: {AP_SSID}  •  SSH: bearbox@{AP_IP}"
-        hw   = Fs.getbbox(hint)[2]
-        d.text(((W - hw) // 2, H - 14), hint, font=Fs, fill=R["dimred"])
-
-        push(img)
-
-        # If a button is in pressed-flash state, wait it out before acting
-        if _pressed_idx != -1 and now >= _pressed_until:
-            ssid = btn_rects[_pressed_idx][4]
-            _pressed_idx   = -1
-            _pressed_until = 0.0
-            _draw_connecting(ssid)
-            if _try_connect(ssid, networks.get(ssid, "")):
-                return "connected", ssid
-            else:
-                _draw_result("Connection failed", f'"{ssid}"', R["red"])
-                # Drain residual events from the long animation, then clear cooldown
-                check_tap()
-                _net_utils._last_tap = 0
-            continue
-
-        if check_tap():
-            tx = _net_utils._tap_x
-            ty = _net_utils._tap_y
-            print(f"[networks] tap ({tx},{ty})")
-            hit = False
-            for idx, (bx, by, bw, bh, ssid) in enumerate(btn_rects):
-                if tapped(bx, by, bw, bh):
-                    print(f"[networks] HIT btn {idx} '{ssid}'")
-                    hit          = True
-                    _pressed_idx   = idx
-                    _pressed_until = time.time() + 0.35
-                    break
-            if not hit:
-                print(f"[networks] MISS — cycle")
-                return "cycle", None
-
+        draw()
         time.sleep(1 / 30)

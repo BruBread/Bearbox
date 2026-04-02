@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """
 BearBox Idle — Offline Mode
-Boots straight into red clock with AP running in background.
+
 3 screens cycling on tap:
   0. Red Clock
-  1. OFFLINE screen
-  2. Saved Networks (shows adapter screen if needed before connecting)
+  1. OFFLINE splash
+  2. QR code → bearbox.local wifi portal
 
-AP on wlan0 starts immediately — no adapter required for clock/offline screens.
-Adapter only needed when user tries to connect via saved networks screen.
-
-Loop order (fixed):
-  1. Draw current screen
-  2. Check tap → increment current
-  3. If NEW current is 2, networks screen runs on next iteration
-  4. Check internet periodically
-  This ensures every screen actually renders before we act on it.
+AP on wlan0 starts immediately.
+Flask portal starts alongside AP, handles wifi connect in background.
+When portal connects, bearbox restarts into online mode.
 """
 
 import os
@@ -29,8 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "../
 
 from clock_offline    import draw as draw_clock
 from hello_offline    import draw as draw_offline
-from networks_offline import run  as run_networks
+from networks_offline import draw as draw_networks
 from network.net_utils import check_tap
+import bb_portal
 
 AP_IFACE = "wlan0"
 AP_IP    = "10.0.0.1"
@@ -75,11 +70,16 @@ def _setup_ap():
         with open("/tmp/bb_offline_dnsmasq.conf", "w") as f:
             f.write(f"interface={AP_IFACE}\n"
                     f"dhcp-range=10.0.0.10,10.0.0.50,255.255.255.0,24h\n"
-                    f"dhcp-option=3,{AP_IP}\ndhcp-option=6,8.8.8.8\n")
+                    f"dhcp-option=3,{AP_IP}\ndhcp-option=6,8.8.8.8\n"
+                    f"address=/bearbox.local/{AP_IP}\n"
+                    f"address=/connectivitycheck.gstatic.com/{AP_IP}\n"
+                    f"address=/captive.apple.com/{AP_IP}\n"
+                    f"address=/msftconnecttest.com/{AP_IP}\n")
         _run("sudo hostapd /tmp/bb_offline_hostapd.conf -B 2>/dev/null")
         time.sleep(1)
         _run("sudo dnsmasq --conf-file=/tmp/bb_offline_dnsmasq.conf 2>/dev/null")
-        print(f">> Offline AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
+        print(f">> Offline AP: {AP_SSID} | portal: bearbox.local")
+        bb_portal.start(port=80)
     except Exception as e:
         print(f">> AP setup failed: {e}")
 
@@ -89,7 +89,7 @@ def _teardown_ap():
     _run(f"sudo ip addr flush dev {AP_IFACE} 2>/dev/null")
     _run(f"nmcli device set {AP_IFACE} managed yes 2>/dev/null")
 
-# ── Main loop ─────────────────────────────────────────────────
+# ── main loop ─────────────────────────────────────────────────
 
 def run():
     threading.Thread(target=_setup_ap, daemon=True).start()
@@ -97,7 +97,7 @@ def run():
     current   = 0
     last_inet = time.time()
 
-    print(f"Offline mode | AP: {AP_SSID} | SSH: bearbox@{AP_IP}")
+    print(f"Offline mode | AP: {AP_SSID} | portal: bearbox.local")
 
     try:
         while True:
@@ -107,34 +107,35 @@ def run():
                 result = draw_clock()
             elif current == 1:
                 result = draw_offline()
-            elif current == 2:
-                # Networks screen blocks internally until user connects or backs out
-                result, ssid = run_networks()
-                if result == "connected":
-                    print(f">> Connected to {ssid}!")
-                    _teardown_ap()
-                    from screen_connected import run as play_connected
-                    play_connected()
-                    subprocess.run("sudo systemctl restart bearbox", shell=True)
-                    return
-                else:
-                    # user backed out — go back to clock
-                    current = 0
-                    continue
+            else:
+                result = draw_networks()
 
-            # ── 2. True/False/None protocol ───────────────────
-            # result is True  → screen got a tap outside a button → cycle
-            # result is False → screen consumed the tap (or busy)  → don't cycle
-            # result is None  → no tap yet → fall through to global check_tap
+            # ── 2. True/False/None tap protocol ──────────────
             if result is True:
                 current = (current + 1) % 3
                 print(f">> Screen: {SCREEN_NAMES[current]}")
             elif result is None and check_tap():
                 current = (current + 1) % 3
                 print(f">> Screen: {SCREEN_NAMES[current]}")
-            # result is False → do nothing, tap already consumed
 
-            # ── 3. Periodic internet check ────────────────────
+            # ── 3. Portal connected in background? ────────────
+            with bb_portal._status_lock:
+                portal_state = bb_portal._status["state"]
+                portal_ssid  = bb_portal._status["ssid"]
+
+            if portal_state == "connected":
+                print(f">> Portal connected to {portal_ssid} — handing off")
+                _teardown_ap()
+                from screen_connected import run as play_connected
+                play_connected()
+                os.execv(
+                    sys.executable,
+                    [sys.executable,
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_main.py")]
+                )
+                return
+
+            # ── 4. Periodic internet check ────────────────────
             if time.time() - last_inet > CHECK_EVERY:
                 last_inet = time.time()
                 if _is_connected():
@@ -153,7 +154,7 @@ def run():
                         [sys.executable,
                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_main.py")]
                     )
-                    return  # never reached
+                    return
 
             time.sleep(1 / 30)
 
