@@ -25,7 +25,7 @@ import threading
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, draw_scanlines, font, C, W, H
 from network.net_utils import check_tap, tapped
-import network.net_utils as _net_utils  # for debug tap coords
+import network.net_utils as _net_utils
 
 # ── Config ────────────────────────────────────────────────────
 BRANCH    = "main"
@@ -97,6 +97,11 @@ _last_failed_at   = 0.0     # timestamp of last failed check — enforces cooldo
 FAIL_COOLDOWN     = 60.0    # seconds before retrying after a failure
 _update_btn_rect  = None    # (x, y, w, h) of action button — set each frame
 _status_msg       = ""
+
+# Reset net_utils' _last_tap to now so the first check_tap() call after
+# module load doesn't falsely fire True from boot residue (_last_tap=0).
+import network.net_utils as _net_utils
+_net_utils._last_tap = time.time()
 
 def request_update_check():
     global _check_requested
