@@ -151,7 +151,64 @@ done
 ok "Python packages installed"
 
 
-# ── LCD DRIVER ────────────────────────────────────────────────
+# ── RTL8188EUS WIFI ADAPTER DRIVER ───────────────────────────
+step "Installing RTL8188EUS monitor mode driver..."
+divider
+info "This is required for the TL-WN722N v2/v3 (pentest adapter)"
+info "The stock kernel driver does not support monitor mode"
+
+KERNEL=$(uname -r)
+DRIVER_KO="/lib/modules/${KERNEL}/kernel/drivers/net/wireless/8188eu.ko"
+
+if [ -f "$DRIVER_KO" ]; then
+    ok "RTL8188EUS driver already installed for kernel ${KERNEL}"
+else
+    # Install build dependencies
+    info "Installing kernel headers and build tools..."
+    (apt install -y -qq bc build-essential linux-headers-${KERNEL} 2>/dev/null) &
+    spinner $! "Installing build dependencies..."
+
+    # Check headers actually exist
+    if [ ! -d "/usr/src/linux-headers-${KERNEL}" ]; then
+        err "Kernel headers not found for ${KERNEL} — run: sudo apt install linux-headers-${KERNEL}"
+    fi
+
+    # Clone the patched driver
+    info "Cloning aircrack-ng rtl8188eus driver..."
+    rm -rf /tmp/rtl8188eus
+    (git clone -q https://github.com/aircrack-ng/rtl8188eus.git /tmp/rtl8188eus) &
+    spinner $! "Cloning rtl8188eus..."
+
+    # Build
+    info "Compiling driver (this takes 2-4 minutes on Pi)..."
+    cd /tmp/rtl8188eus
+    make KSRC=/usr/src/linux-headers-${KERNEL} -j4 > /tmp/8188eu_build.log 2>&1 &
+    spinner $! "Compiling 8188eu.ko..."
+
+    # Check build succeeded
+    if [ ! -f "/tmp/rtl8188eus/8188eu.ko" ]; then
+        err "Driver build failed — check /tmp/8188eu_build.log"
+    fi
+
+    # Install
+    make install >> /tmp/8188eu_build.log 2>&1
+    ok "Driver compiled and installed"
+fi
+
+# Blacklist the broken stock driver
+if [ ! -f /etc/modprobe.d/blacklist-rtl8xxxu.conf ]; then
+    echo "blacklist rtl8xxxu" > /etc/modprobe.d/blacklist-rtl8xxxu.conf
+    ok "Blacklisted stock rtl8xxxu driver"
+else
+    ok "Stock driver already blacklisted"
+fi
+
+# Make it load on boot
+echo "8188eu" > /etc/modules-load.d/8188eu.conf
+depmod -a > /dev/null 2>&1
+ok "8188eu configured to load on boot"
+
+cd /home/bearbox
 step "Checking LCD driver..."
 divider
 if [ -e /dev/fb1 ]; then
