@@ -107,12 +107,12 @@ def launch_idle():
     print("Launching idle screen")
     return subprocess.Popen(
         ["python3", script],
-        env={**os.environ, "PYTHONPATH": PYTHONPATH}
+        env={**os.environ, "PYTHONPATH": PYTHONPATH, "PYTHONDONTWRITEBYTECODE": "1"}
     )
 
 def launch_profile(profile: str):
     profile_map = {
-        "pentest":     f"{BASE}/profiles/pentest/ui.py",
+        "pentest":     f"{BASE}/profiles/pentest/launch.sh",
         "ap":          f"{BASE}/profiles/wifi/ap/ap_main.py",
         "games":       f"{BASE}/profiles/games/launcher.py",
         "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
@@ -128,9 +128,10 @@ def launch_profile(profile: str):
         print(f"Profile script not found: {script}")
         return None
     print(f"Launching profile: {profile}")
+    executable = ["bash", script] if script.endswith(".sh") else ["python3", script]
     return subprocess.Popen(
-        ["python3", script],
-        env={**os.environ, "PYTHONPATH": PYTHONPATH}
+        executable,
+        env={**os.environ, "PYTHONPATH": PYTHONPATH, "PYTHONDONTWRITEBYTECODE": "1"}
     )
 
 # Profiles that warrant a "MODULE DISCONNECTED" screen when unplugged.
