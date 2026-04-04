@@ -4,12 +4,15 @@ BearBox — Profile Manager
 Watches for USB devices and launches the correct profile.
 
 Device → Profile:
-  TL-WN722N only          → pentest
-  TL-WN722N + ethernet    → ap
+  TL-WN722N (any)         → pentest  (RECON or SIPHON decided internally)
   USB Drive               → games
   Rubber Ducky            → rubberducky
   USB Keyboard            → keyboard
   Nothing                 → idle
+
+NOTE: TL-WN722N + ethernet used to route to "ap" — that's now handled
+inside the pentest profile itself as SIPHON mode. The standalone AP
+profile (wlan0 hotspot, no TL-WN722N) is not affected.
 """
 
 import subprocess
@@ -87,10 +90,8 @@ def get_active_profile():
 
     for vid_pid, profile in PROFILES.items():
         if vid_pid in devices:
-            if profile == "pentest" and _is_offline_mode():
-                return None
-            if profile == "pentest" and eth_connected():
-                return "ap"
+            # TL-WN722N always goes to pentest regardless of ethernet or
+            # offline mode. RECON vs SIPHON is decided inside pentest/ui.py.
             return profile
 
     if detect_usb_drive():

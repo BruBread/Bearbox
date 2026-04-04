@@ -119,6 +119,12 @@ PACKAGES=(
     python3-flask
     python3-smbus
     i2c-tools
+    # pentest profile dependencies
+    bettercap
+    nmap
+    nikto
+    gobuster
+    hcxdumptool
 )
 for pkg in "${PACKAGES[@]}"; do
     # skip comment lines
@@ -135,6 +141,8 @@ divider
 PIP_PACKAGES=(
     "qrcode[pil]"
     pillow
+    requests
+    sseclient-py
 )
 for pkg in "${PIP_PACKAGES[@]}"; do
     (pip3 install "$pkg" --break-system-packages -q 2>/dev/null) &
@@ -223,6 +231,31 @@ else
 fi
 
 
+# ── PENTEST: passwordless sudo for pentest tools ──────────────
+step "Configuring pentest tool permissions..."
+divider
+PENTEST_SUDOERS="/etc/sudoers.d/bearbox-pentest"
+PENTEST_RULES="bearbox ALL=(ALL) NOPASSWD: \
+/usr/bin/bettercap, \
+/usr/bin/nmap, \
+/usr/sbin/airmon-ng, \
+/usr/bin/hcxdumptool, \
+/usr/sbin/ip, \
+/usr/bin/ip, \
+/sbin/ip, \
+/usr/sbin/iw, \
+/usr/bin/iw, \
+/sbin/iptables, \
+/usr/sbin/iptables"
+if ! [ -f "$PENTEST_SUDOERS" ]; then
+    echo "$PENTEST_RULES" > "$PENTEST_SUDOERS"
+    chmod 440 "$PENTEST_SUDOERS"
+    ok "Pentest sudoers rules installed"
+else
+    ok "Pentest sudoers rules already present"
+fi
+
+
 # ── PORTAL: enable I2C (for future battery HAT support) ───────
 step "Enabling I2C interface..."
 divider
@@ -269,6 +302,14 @@ else
     info "No config.json found — skipping WiFi setup"
     info "Create config.json and re-run install.sh"
 fi
+
+
+step "Creating loot directory..."
+divider
+mkdir -p /home/bearbox/loot
+chown -R bearbox:bearbox /home/bearbox/loot
+chmod 755 /home/bearbox/loot
+ok "Loot directory ready at /home/bearbox/loot"
 
 
 step "Installing BearBox service..."

@@ -8,8 +8,8 @@ alias bbstart='sudo systemctl start bearbox && echo "BearBox started!"'
 alias bbstop='sudo systemctl stop bearbox && echo "BearBox stopped."'
 alias bbrestart='sudo systemctl restart bearbox && echo "BearBox restarted."'
 alias bbstatus='sudo systemctl status bearbox'
-alias bblogs='sudo journalctl -u bearbox -f'
-alias bbshutdown='sudo python3 $BB/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped."'
+alias bblogs='tail -f /tmp/bearbox_boot.log & sudo journalctl -u bearbox -f'alias
+bbshutdown='sudo python3 $BB/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped."'
 
 # ── Dev / Files ───────────────────────────────────────────────
 alias bbedit='cd ~/bearbox'
