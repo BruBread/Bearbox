@@ -116,13 +116,13 @@ def run():
                 current = (current + 1) % 3
                 # Flush stale taps when entering networks (has buttons)
                 if current == 2:
-                    _net_utils._last_tap = 0
+                    _net_utils._last_tap = time.time()
                 print(f">> Screen: {SCREEN_NAMES[current]}")
             elif result is None and check_tap():
                 current = (current + 1) % 3
                 # Flush stale taps when entering networks (has buttons)
                 if current == 2:
-                    _net_utils._last_tap = 0
+                    _net_utils._last_tap = time.time()
                 print(f">> Screen: {SCREEN_NAMES[current]}")
 
             # ── 3. Portal connected in background? ────────────
