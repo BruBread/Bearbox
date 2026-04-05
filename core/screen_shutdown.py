@@ -10,11 +10,26 @@ import time
 import random
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from display import new_frame, push, font, W, H
+from display import new_frame, font, W, H, get_rotation
 from PIL import Image, ImageDraw
 import numpy as np
 
 DURATION = 2.5
+
+# Push with the current rotation so animation matches screen orientation
+_ROT = get_rotation()
+
+def push(img):
+    """Push frame using the saved rotation setting."""
+    if _ROT:
+        img = img.rotate(_ROT)
+    arr    = np.array(img.convert("RGB"), dtype=np.uint16)
+    r      = (arr[:, :, 0] >> 3).astype(np.uint16)
+    g      = (arr[:, :, 1] >> 2).astype(np.uint16)
+    b      = (arr[:, :, 2] >> 3).astype(np.uint16)
+    rgb565 = (r << 11) | (g << 5) | b
+    with open("/dev/fb1", "wb") as f:
+        f.write(rgb565.tobytes())
 
 
 def run():
