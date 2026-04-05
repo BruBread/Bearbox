@@ -5,11 +5,43 @@ PYPATH="$BB/core:$BB"
 
 # ── Service Control ───────────────────────────────────────────
 alias bbstart='sudo systemctl start bearbox && echo "BearBox started!"'
-alias bbstop='sudo systemctl stop bearbox && echo "BearBox stopped."'
+
+alias bbstop='f() {
+    sudo systemctl stop bearbox
+    # Disable so it does not auto-start on next boot
+    # Comment this out if you want it to restart on reboot
+    # sudo systemctl disable bearbox
+    echo "BearBox stopped. Will restart on next reboot."
+    echo "Run bbstart to bring it back, or reboot to auto-start."
+}; f'
+
 alias bbrestart='sudo systemctl restart bearbox && echo "BearBox restarted."'
 alias bbstatus='sudo systemctl status bearbox'
-alias bblogs='tail -f /tmp/bearbox_boot.log & sudo journalctl -u bearbox -f'alias
-bbshutdown='sudo python3 $BB/core/screen_shutdown.py && sudo systemctl stop bearbox && echo "BearBox stopped."'
+
+alias bblogs='f() {
+    echo "=== Live logs (Ctrl+C to exit) ==="
+    echo "--- journalctl + crash log + boot log ---"
+    # Tail crash log in background
+    tail -f /tmp/pentest_crash.log 2>/dev/null &
+    CRASH_PID=$!
+    # Tail boot log in background
+    tail -f /tmp/bearbox_boot.log 2>/dev/null &
+    BOOT_PID=$!
+    # Live journal in foreground
+    sudo journalctl -u bearbox -f --no-pager
+    # Clean up background tails when journal exits
+    kill $CRASH_PID 2>/dev/null
+    kill $BOOT_PID 2>/dev/null
+}; f'
+
+alias bbshutdown='f() {
+    echo "Stopping BearBox service..."
+    sudo systemctl stop bearbox
+    sleep 0.5
+    echo "Playing shutdown animation..."
+    sudo env PYTHONPATH=$PYPATH python3 $BB/core/screen_shutdown.py
+    echo "BearBox offline."
+}; f'
 
 # ── Dev / Files ───────────────────────────────────────────────
 alias bbedit='cd ~/bearbox'
@@ -63,7 +95,7 @@ alias bbwifi='f() {
     fi
     sleep 2
     echo "SSID: $(iwgetid -r 2>/dev/null || echo none)"
-    echo "IP:   $(hostname -I | awk "{print $1}")"
+    echo "IP:   $(hostname -I | awk "{print \$1}")"
 }; f'
 
 alias bbdisconnect='f() {
@@ -144,6 +176,21 @@ alias bbonline='f() {
     sudo systemctl restart bearbox
 }; f'
 
+# ── Pentest shortcuts ─────────────────────────────────────────
+alias bbpentest='f() {
+    echo "=== Pentest Status ==="
+    echo "bettercap: $(pgrep -x bettercap > /dev/null && echo RUNNING || echo stopped)"
+    echo "hcxdump:   $(pgrep -x hcxdumptool > /dev/null && echo RUNNING || echo stopped)"
+    echo "portal:    $(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 2>/dev/null)"
+    echo "mode:      $(cat /tmp/bb_pentest_mode 2>/dev/null || echo unknown)"
+    echo "loot:      $(du -sh /home/bearbox/loot 2>/dev/null | cut -f1) in /home/bearbox/loot"
+}; f'
+
+alias bbpencrash='f() {
+    echo "=== Last pentest crash ==="
+    cat /tmp/pentest_crash.log 2>/dev/null || echo "No crash log found."
+}; f'
+
 # ── Help ──────────────────────────────────────────────────────
 alias bbhelp='echo "
 ╔══════════════════════════════════════════════════════════╗
@@ -151,10 +198,10 @@ alias bbhelp='echo "
 ╠══════════════════════════════════════════════════════════╣
 ║  SERVICE                                                 ║
 ║    bbstart       Start the service                       ║
-║    bbstop        Stop the service                        ║
+║    bbstop        Stop the service (keeps autostart)      ║
 ║    bbrestart     Restart the service                     ║
 ║    bbstatus      Show service status                     ║
-║    bblogs        Tail live logs (Ctrl+C to exit)         ║
+║    bblogs        Tail all logs (journal+crash+boot)      ║
 ║    bbshutdown    Play shutdown screen then stop          ║
 ║                                                          ║
 ║  DEV                                                     ║
@@ -176,6 +223,10 @@ alias bbhelp='echo "
 ║                                                          ║
 ║  DISPLAY                                                 ║
 ║    bbrotate      Toggle 180° screen flip                 ║
+║                                                          ║
+║  PENTEST                                                 ║
+║    bbpentest     Show pentest module status              ║
+║    bbpencrash    Show last pentest crash log             ║
 ║                                                          ║
 ║  DANGER ZONE                                             ║
 ║    bbreset       Completely wipe BearBox from this Pi    ║
