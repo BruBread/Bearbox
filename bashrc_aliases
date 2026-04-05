@@ -20,16 +20,13 @@ alias bbstatus='sudo systemctl status bearbox'
 
 alias bblogs='f() {
     echo "=== Live logs (Ctrl+C to exit) ==="
-    echo "--- journalctl + crash log + boot log ---"
-    # Tail crash log in background
-    tail -f /tmp/pentest_crash.log 2>/dev/null &
+    # Touch log files so tail does not fail if they dont exist yet
+    touch /tmp/pentest_crash.log /tmp/bearbox_boot.log
+    tail -f /tmp/pentest_crash.log &
     CRASH_PID=$!
-    # Tail boot log in background
-    tail -f /tmp/bearbox_boot.log 2>/dev/null &
+    tail -f /tmp/bearbox_boot.log &
     BOOT_PID=$!
-    # Live journal in foreground
     sudo journalctl -u bearbox -f --no-pager
-    # Clean up background tails when journal exits
     kill $CRASH_PID 2>/dev/null
     kill $BOOT_PID 2>/dev/null
 }; f'
