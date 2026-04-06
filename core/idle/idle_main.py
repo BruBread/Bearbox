@@ -26,15 +26,17 @@ import subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 # ── import screens ────────────────────────────────────────────
-from clock import draw as draw_clock
-from hello import draw as draw_hello
-from bear  import draw as draw_bear
+from clock      import draw as draw_clock
+from hello      import draw as draw_hello
+from bear       import draw as draw_bear
+from disconnect import draw as draw_disconnect
 # from matrix import draw as draw_matrix
 
 SCREENS = [
-    ("clock", draw_clock),
-    ("hello", draw_hello),
-    ("bear",  draw_bear),
+    ("clock",      draw_clock),
+    ("hello",      draw_hello),
+    ("bear",       draw_bear),
+    ("disconnect", draw_disconnect),
     # ("matrix", draw_matrix),
 ]
 
