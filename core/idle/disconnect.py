@@ -11,6 +11,8 @@ States:
   disconnected — confirmation screen + "TAP TO RECONNECT" button (optional)
 """
 
+
+
 import time, os, sys, math, random, string, subprocess, threading
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from display import new_frame, push, draw_scanlines, font, C, W, H
