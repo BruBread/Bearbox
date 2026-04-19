@@ -285,7 +285,7 @@ def run_sender(state, log: CaptionLog, config: dict):
 
         # ── Fire send in worker thread ─────────────────────────
         busy  = True
-        frame = state.get_frame()
+        frame = state.get_raw_frame()
         tag   = "manual" if fired_manual else "auto"
         url   = laptop_url  # snapshot the URL in case it changes
 

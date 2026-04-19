@@ -20,6 +20,7 @@ class DetectionState:
     def __init__(self):
         self._lock           = threading.Lock()
         self.latest_frame    = None    # annotated frame (numpy BGR)
+        self.raw_frame       = None    # clean frame before annotation (sent to AI)
         self.motion          = False   # True if motion this frame
         self.motion_count    = 0       # total motion events since start
         self.motion_area     = 0       # total contour area this frame (px²)
@@ -35,9 +36,10 @@ class DetectionState:
 
     # ── Detection updates ──────────────────────────────────────
 
-    def update(self, frame, motion, fps, motion_area=0):
+    def update(self, frame, raw, motion, fps, motion_area=0):
         with self._lock:
             self.latest_frame = frame
+            self.raw_frame    = raw
             self.fps          = fps
             self.motion_area  = motion_area
             if motion and not self.motion:
@@ -50,8 +52,13 @@ class DetectionState:
         with self._lock:
             return self.latest_frame.copy() if self.latest_frame is not None else None
 
+    def get_raw_frame(self):
+        """Return a copy of the latest clean frame (no annotations) for AI sending."""
+        with self._lock:
+            return self.raw_frame.copy() if self.raw_frame is not None else None
+
     def get_stream_frame(self):
-        """Return latest frame for the MJPEG stream."""
+        """Return latest annotated frame for the MJPEG stream."""
         with self._lock:
             if self.latest_frame is None:
                 return None
@@ -126,6 +133,9 @@ def run_detection(state: DetectionState, config: dict):
             fps_frames = 0
             fps_start  = time.time()
 
+        # Save clean frame before any drawing happens
+        raw = frame.copy()
+
         if frame_idx % detect_every == 0:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
@@ -152,7 +162,7 @@ def run_detection(state: DetectionState, config: dict):
             prev_gray = gray
 
         _annotate(frame, motion, fps, state.motion_count)
-        state.update(frame, motion, fps, motion_area)
+        state.update(frame, raw, motion, fps, motion_area)
 
     cap.release()
     print("[detect] Detection thread stopped")
