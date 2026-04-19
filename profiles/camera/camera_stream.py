@@ -2,20 +2,14 @@
 """
 BearBox Camera — Flask Stream
 
-Single-page UI at / and /stream:
-  - Live MJPEG video feed
-  - AI capture controls (auto toggle + manual button)
-  - Motion caption log (last 20 entries with thumbnails)
-
 Endpoints:
-    GET  /              — main UI page (same as /stream)
-    GET  /stream        — main UI page
-    GET  /feed          — raw MJPEG feed (used by the <img> tag on the page)
-    GET  /status        — JSON motion + caption status
-    GET  /log           — JSON array of last 20 caption entries
-    GET  /log/ui        — redirects to /stream
-    POST /capture/now   — manually trigger a single AI caption job
-    POST /capture/auto  — toggle automatic motion captioning on/off
+    GET  /             — main UI page
+    GET  /stream       — main UI page
+    GET  /feed         — raw MJPEG feed
+    GET  /status       — JSON status
+    GET  /log          — JSON array of last 20 entries
+    POST /capture/now  — manual send trigger
+    POST /capture/auto — toggle auto mode on/off
 """
 
 import cv2
@@ -24,15 +18,14 @@ import threading
 import datetime
 from flask import Flask, Response, jsonify, request, redirect
 
-import profiles.camera.camera_caption as _caption_mod
+import profiles.camera.camera_sender as _sender_mod
 
-app = Flask(__name__)
+app    = Flask(__name__)
+_state = None
+_log   = None
 
-_state = None   # DetectionState — set by start_stream()
-_log   = None   # CaptionLog    — set by start_stream()
 
-
-# ── Raw MJPEG feed (used by <img src="/feed"> on the page) ───
+# ── MJPEG feed ─────────────────────────────────────────────────
 
 def _generate():
     while True:
@@ -56,28 +49,27 @@ def feed():
     )
 
 
-# ── Status JSON ───────────────────────────────────────────────
+# ── Status ─────────────────────────────────────────────────────
 
 @app.route("/status")
 def status():
     s = _state.get_status()
     return jsonify({
-        "motion":         s["motion"],
-        "motion_count":   s["motion_count"],
-        "fps":            s["fps"],
-        "last_motion":    s["last_motion"],
-        "caption_status": s["caption_status"],
-        "latest_caption": s["latest_caption"],
-        "auto_enabled":   _caption_mod.auto_enabled,
-        "overlay_enabled": _caption_mod.overlay_enabled,
+        "motion":             s["motion"],
+        "motion_count":       s["motion_count"],
+        "fps":                s["fps"],
+        "last_motion":        s["last_motion"],
+        "ai_status":          s["ai_status"],
+        "latest_description": s["latest_description"],
+        "auto_enabled":       _sender_mod.auto_enabled,
     })
 
 
-# ── Caption controls ──────────────────────────────────────────
+# ── Capture controls ───────────────────────────────────────────
 
 @app.route("/capture/now", methods=["POST"])
 def capture_now():
-    _caption_mod.manual_trigger = True
+    _sender_mod.manual_trigger = True
     return jsonify({"ok": True, "message": "Manual capture queued"})
 
 
@@ -85,48 +77,33 @@ def capture_now():
 def capture_auto():
     data = request.get_json(silent=True) or {}
     if "enabled" in data:
-        _caption_mod.auto_enabled = bool(data["enabled"])
+        _sender_mod.auto_enabled = bool(data["enabled"])
     else:
-        _caption_mod.auto_enabled = not _caption_mod.auto_enabled
-    print(f"[stream] Auto capture {'ON' if _caption_mod.auto_enabled else 'OFF'}")
-    return jsonify({"ok": True, "auto_enabled": _caption_mod.auto_enabled})
+        _sender_mod.auto_enabled = not _sender_mod.auto_enabled
+    print(f"[stream] Auto capture {'ON' if _sender_mod.auto_enabled else 'OFF'}")
+    return jsonify({"ok": True, "auto_enabled": _sender_mod.auto_enabled})
 
 
-# ── Caption log JSON ──────────────────────────────────────────
-
-@app.route("/overlay/toggle", methods=["POST"])
-def overlay_toggle():
-    data = request.get_json(silent=True) or {}
-    if "enabled" in data:
-        _caption_mod.overlay_enabled = bool(data["enabled"])
-    else:
-        _caption_mod.overlay_enabled = not _caption_mod.overlay_enabled
-    # Clear stale overlay frame when disabling so stream reverts instantly
-    if not _caption_mod.overlay_enabled and _state is not None:
-        _state.set_overlay_frame(None)
-    print(f"[stream] Overlay {'ON' if _caption_mod.overlay_enabled else 'OFF'}")
-    return jsonify({"ok": True, "overlay_enabled": _caption_mod.overlay_enabled})
-
+# ── Log ────────────────────────────────────────────────────────
 
 @app.route("/log")
 def log_json():
     entries = _log.get_all()
     return jsonify([{
-        "timestamp":  e["timestamp"],
-        "time_str":   _fmt_ts(e["timestamp"]),
-        "caption":    e["caption"],
-        "thumb_b64":  e["thumb_b64"],
+        "timestamp":   e["timestamp"],
+        "time_str":    _fmt_ts(e["timestamp"]),
+        "description": e["description"],
+        "thumb_b64":   e["thumb_b64"],
+        "tag":         e["tag"],
     } for e in entries])
 
-
-# ── /log/ui redirect ──────────────────────────────────────────
 
 @app.route("/log/ui")
 def log_ui():
     return redirect("/stream", code=302)
 
 
-# ── Main UI page ──────────────────────────────────────────────
+# ── Main UI ────────────────────────────────────────────────────
 
 _PAGE_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -159,11 +136,9 @@ _PAGE_HTML = """<!DOCTYPE html>
     flex-direction: column;
   }
 
-  /* scanlines */
   body::before {
     content: '';
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background: repeating-linear-gradient(
       to bottom,
       transparent 0px, transparent 3px,
@@ -173,7 +148,6 @@ _PAGE_HTML = """<!DOCTYPE html>
     z-index: 200;
   }
 
-  /* ── Header ── */
   header {
     background: var(--panel);
     border-bottom: 1px solid var(--dimamber);
@@ -183,328 +157,217 @@ _PAGE_HTML = """<!DOCTYPE html>
     justify-content: space-between;
     flex-shrink: 0;
   }
-
   header h1 {
-    font-size: 1rem;
-    font-weight: bold;
-    color: var(--amber);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
+    font-size: 1rem; font-weight: bold;
+    color: var(--amber); letter-spacing: 0.15em; text-transform: uppercase;
   }
-
-  .live-badge {
-    font-size: 0.7rem;
-    color: var(--dimwhite);
-  }
+  .live-badge { font-size: 0.7rem; color: var(--dimwhite); }
   .live-badge span { color: var(--green); margin-right: 4px; }
 
-  /* ── Video section ── */
   .video-section {
     background: #000;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    display: flex; justify-content: center; align-items: center;
     border-bottom: 2px solid var(--dimamber);
-    position: relative;
-    flex-shrink: 0;
+    position: relative; flex-shrink: 0;
   }
-
   .video-section img {
-    display: block;
-    max-width: 100%;
-    max-height: 60vh;
-    width: auto;
-    height: auto;
+    display: block; max-width: 100%; max-height: 60vh;
+    width: auto; height: auto;
   }
+  .video-section.motion-active { box-shadow: inset 0 0 0 3px var(--red); }
 
-  /* motion flash border on video */
-  .video-section.motion-active {
-    box-shadow: inset 0 0 0 3px var(--red);
-  }
-
-  /* ── Controls bar ── */
   .controls {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: flex; align-items: center; gap: 12px;
     padding: 10px 20px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
-    flex-wrap: wrap;
-    flex-shrink: 0;
+    flex-wrap: wrap; flex-shrink: 0;
   }
-
   .controls-label {
-    font-size: 0.7rem;
-    color: var(--dimamber);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-size: 0.7rem; color: var(--dimamber);
+    text-transform: uppercase; letter-spacing: 0.08em;
   }
-
-  /* slider toggle */
-  .toggle-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .toggle-label {
-    font-size: 0.76rem;
-    min-width: 62px;
-  }
-  .toggle-label.on  { color: var(--amber); }
+  .toggle-wrap { display: flex; align-items: center; gap: 8px; }
+  .toggle-label { font-size: 0.76rem; min-width: 72px; }
+  .toggle-label.on  { color: var(--green); }
   .toggle-label.off { color: var(--dimwhite); }
 
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 44px;
-    height: 24px;
-    flex-shrink: 0;
-  }
-  .switch input { opacity: 0; width: 0; height: 0; }
-
-  .slider {
-    position: absolute;
-    inset: 0;
+  input[type=checkbox] { display: none; }
+  .toggle-switch {
+    width: 36px; height: 18px;
     background: var(--darkamber);
     border: 1px solid var(--dimamber);
-    border-radius: 24px;
-    cursor: pointer;
-    transition: background 0.2s;
+    border-radius: 9px; cursor: pointer;
+    position: relative; transition: background 0.2s;
   }
-  .slider::before {
-    content: '';
-    position: absolute;
-    width: 16px; height: 16px;
-    left: 3px; top: 3px;
-    background: var(--dimamber);
-    border-radius: 50%;
-    transition: transform 0.2s, background 0.2s;
+  .toggle-switch::after {
+    content: ''; position: absolute;
+    width: 12px; height: 12px;
+    background: var(--dimamber); border-radius: 50%;
+    top: 2px; left: 2px; transition: left 0.2s, background 0.2s;
   }
-  input:checked + .slider { background: #3a2000; border-color: var(--amber); }
-  input:checked + .slider::before { background: var(--amber); transform: translateX(20px); }
-
-  .controls-divider {
-    width: 1px; height: 24px;
-    background: var(--border);
+  input[type=checkbox]:checked + .toggle-switch {
+    background: #003820; border-color: var(--green);
+  }
+  input[type=checkbox]:checked + .toggle-switch::after {
+    left: 20px; background: var(--green);
   }
 
-  /* capture button */
-  .btn-capture {
+  .btn {
     font-family: 'Courier New', Courier, monospace;
-    font-size: 0.76rem;
-    font-weight: bold;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--bg);
-    background: var(--amber);
-    border: none;
-    border-radius: 3px;
-    padding: 6px 14px;
-    cursor: pointer;
-    transition: background 0.15s;
-    flex-shrink: 0;
+    font-size: 0.76rem; padding: 6px 14px;
+    border: 1px solid var(--dimamber);
+    background: var(--darkamber); color: var(--amber);
+    cursor: pointer; letter-spacing: 0.05em; text-transform: uppercase;
+    transition: background 0.15s, border-color 0.15s;
   }
-  .btn-capture:hover   { background: #ffc840; }
-  .btn-capture:active  { background: var(--dimamber); color: var(--amber); }
-  .btn-capture:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    background: var(--dimamber);
-    color: var(--darkamber);
-  }
+  .btn:hover:not(:disabled) { background: #2a1400; border-color: var(--amber); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* toast */
-  .toast {
-    font-size: 0.7rem;
-    padding: 3px 9px;
-    border-radius: 3px;
-    opacity: 0;
-    transition: opacity 0.25s;
-    pointer-events: none;
-  }
-  .toast.show { opacity: 1; }
-  .toast.ok   { color: var(--green); background: rgba(0,255,80,0.08);  border: 1px solid rgba(0,255,80,0.2);  }
-  .toast.warn { color: var(--amber); background: rgba(255,176,0,0.08); border: 1px solid rgba(255,176,0,0.2); }
-  .toast.err  { color: var(--red);   background: rgba(255,50,50,0.08); border: 1px solid rgba(255,50,50,0.2); }
-
-  /* ── Status strip ── */
-  .status-strip {
-    display: flex;
-    gap: 18px;
-    flex-wrap: wrap;
-    padding: 7px 20px;
+  .status-bar {
+    display: flex; gap: 20px;
+    padding: 8px 20px;
     background: var(--darkamber);
     border-bottom: 1px solid var(--border);
-    font-size: 0.72rem;
-    flex-shrink: 0;
+    flex-wrap: wrap; flex-shrink: 0;
   }
-  .status-strip .lbl { color: var(--dimamber); margin-right: 4px; }
-  .status-strip .val { color: var(--amber); }
-  .status-strip .val.red   { color: var(--red); }
-  .status-strip .val.green { color: var(--green); }
+  .stat { font-size: 0.72rem; }
+  .stat .lbl { color: var(--dimamber); margin-right: 4px; }
+  .stat .val { color: var(--white); }
+  .stat .val.red   { color: var(--red); }
+  .stat .val.amber { color: var(--amber); }
+  .stat .val.green { color: var(--green); }
 
-  /* ── Log section ── */
-  .log-section {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0 20px 24px;
-  }
-
-  .log-header {
-    position: sticky;
-    top: 0;
-    background: var(--bg);
-    font-size: 0.67rem;
-    color: var(--dimamber);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 8px 0 6px;
+  .description-bar {
+    padding: 8px 20px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
-    margin-bottom: 6px;
-    display: flex;
-    justify-content: space-between;
-    z-index: 10;
+    font-size: 0.75rem; color: var(--dimwhite);
+    flex-shrink: 0; min-height: 34px;
   }
+  .description-bar .lbl { color: var(--dimamber); margin-right: 6px; }
+  .description-bar .txt { color: var(--white); }
 
-  .empty {
-    padding: 40px;
-    text-align: center;
-    color: var(--dimwhite);
-    font-size: 0.82rem;
-    line-height: 1.9;
+  .log-section { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .log-header {
+    display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 12px;
   }
+  .log-title {
+    font-size: 0.8rem; color: var(--amber);
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .log-meta { font-size: 0.68rem; color: var(--dimwhite); }
 
   .entry {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
+    display: flex; gap: 12px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
   }
-
   .thumb {
-    flex-shrink: 0;
-    width: 88px; height: 50px;
-    background: var(--darkamber);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 80px; height: 45px; flex-shrink: 0;
+    background: #000; border: 1px solid var(--border);
+    overflow: hidden; display: flex;
+    align-items: center; justify-content: center;
   }
-  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .thumb .no-thumb { font-size: 0.56rem; color: var(--dimamber); text-align: center; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .no-thumb  { font-size: 0.6rem; color: var(--dimamber); text-align: center; }
 
   .entry-body { flex: 1; min-width: 0; }
-
   .entry-meta {
-    font-size: 0.66rem;
-    color: var(--dimamber);
-    margin-bottom: 3px;
-    display: flex;
-    gap: 8px;
-    align-items: center;
+    font-size: 0.68rem; color: var(--dimwhite);
+    margin-bottom: 4px;
+    display: flex; align-items: center; gap: 6px;
   }
+  .entry-description {
+    font-size: 0.78rem; color: var(--white);
+    line-height: 1.45; word-break: break-word;
+  }
+  .entry-description.error { color: var(--red); }
 
   .tag-manual {
-    color: var(--amber);
-    border: 1px solid var(--dimamber);
-    border-radius: 2px;
-    padding: 0 3px;
-    font-size: 0.6rem;
+    font-size: 0.6rem; padding: 1px 5px;
+    border: 1px solid var(--amber); color: var(--amber);
+    letter-spacing: 0.05em;
+  }
+  .tag-error {
+    font-size: 0.6rem; padding: 1px 5px;
+    border: 1px solid var(--red); color: var(--red);
+    letter-spacing: 0.05em;
   }
 
-  .entry-caption {
-    font-size: 0.86rem;
-    color: var(--white);
-    line-height: 1.45;
-    word-break: break-word;
+  .empty {
+    color: var(--dimwhite); font-size: 0.8rem;
+    text-align: center; padding: 40px 0; line-height: 1.8;
   }
-  .entry-caption.error { color: var(--red); font-style: italic; }
-  .entry:first-child .entry-caption:not(.error) { color: var(--amber); }
 
-  .footer-note {
-    text-align: center;
-    font-size: 0.66rem;
-    color: var(--dimamber);
-    padding: 14px 20px;
-    flex-shrink: 0;
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    padding: 8px 16px; font-size: 0.76rem;
+    border-radius: 2px; opacity: 0;
+    transition: opacity 0.2s; z-index: 999; pointer-events: none;
   }
+  .toast.show { opacity: 1; }
+  .toast.ok   { background: #003820; border: 1px solid var(--green); color: var(--green); }
+  .toast.warn { background: #1a0e00; border: 1px solid var(--amber); color: var(--amber); }
+  .toast.err  { background: #1a0000; border: 1px solid var(--red);   color: var(--red);   }
 </style>
 </head>
 <body>
 
-<!-- Header -->
 <header>
-  <h1>&#9654; BearBox &mdash; Camera</h1>
-  <div class="live-badge"><span>&#9679;</span> LIVE</div>
+  <h1>BearBox — Camera</h1>
+  <div class="live-badge"><span>●</span> LIVE</div>
 </header>
 
-<!-- Video -->
 <div class="video-section" id="video-section">
-  <img src="/feed" alt="Live camera feed">
+  <img src="/feed" alt="camera feed">
 </div>
 
-<!-- Controls -->
 <div class="controls">
-  <span class="controls-label">AI Capture</span>
-
+  <span class="controls-label">AI Auto</span>
   <div class="toggle-wrap">
-    <span class="toggle-label on" id="auto-label">AUTO ON</span>
-    <label class="switch">
-      <input type="checkbox" id="auto-toggle" checked onchange="toggleAuto(this.checked)">
-      <span class="slider"></span>
-    </label>
+    <input type="checkbox" id="auto-toggle"
+           onchange="toggleAuto(this.checked)" __AUTO_CHECKED__>
+    <label class="toggle-switch" for="auto-toggle"></label>
+    <span class="toggle-label __AUTO_CLASS__" id="auto-label">__AUTO_TEXT__</span>
   </div>
-
-  <div class="controls-divider"></div>
-
-  <div class="toggle-wrap">
-    <span class="toggle-label off" id="overlay-label">OVERLAY OFF</span>
-    <label class="switch">
-      <input type="checkbox" id="overlay-toggle" __OVERLAY_CHECKED__ onchange="toggleOverlay(this.checked)">
-      <span class="slider"></span>
-    </label>
-  </div>
-
-  <div class="controls-divider"></div>
-
-  <button class="btn-capture" id="btn-manual" onclick="manualCapture()">
-    &#9654; Capture Now
-  </button>
-
-  <span class="toast" id="toast"></span>
+  <button class="btn" id="btn-manual" onclick="manualCapture()">▶ Capture Now</button>
 </div>
 
-<!-- Status strip -->
-<div class="status-strip">
-  <span><span class="lbl">AI</span><span class="val" id="s-capstat">__CAP_STATUS__</span></span>
-  <span><span class="lbl">MOTION</span><span class="val __MC_CLASS__" id="s-motion">__MOTION_COUNT__ events</span></span>
-  <span><span class="lbl">FPS</span><span class="val" id="s-fps">__FPS__</span></span>
-  <span><span class="lbl">LATEST</span><span class="val" id="s-latest" style="color:var(--dimwhite);font-size:0.68rem;">__LATEST_CAPTION__</span></span>
+<div class="status-bar">
+  <div class="stat">
+    <span class="lbl">AI</span>
+    <span class="val amber" id="s-aistatus">__AI_STATUS__</span>
+  </div>
+  <div class="stat">
+    <span class="lbl">FPS</span>
+    <span class="val" id="s-fps">__FPS__</span>
+  </div>
+  <div class="stat">
+    <span class="lbl">MOTION</span>
+    <span class="val __MC_CLASS__" id="s-motion">__MOTION_COUNT__ events</span>
+  </div>
 </div>
 
-<!-- Log -->
+<div class="description-bar">
+  <span class="lbl">LAST DESCRIPTION</span>
+  <span class="txt" id="s-description">__LATEST_DESCRIPTION__</span>
+</div>
+
 <div class="log-section">
   <div class="log-header">
-    <span id="log-count">Caption Log &mdash; __ENTRY_COUNT__ entries (newest first)</span>
-    <span id="last-refresh">loaded __LOAD_TIME__</span>
+    <div class="log-title" id="log-count">Caption Log — __ENTRY_COUNT__ entries (newest first)</div>
+    <div class="log-meta" id="last-refresh">loaded __LOAD_TIME__</div>
   </div>
   <div id="log-rows">__LOG_ROWS__</div>
 </div>
 
-<p class="footer-note">
-  Log refreshes every 5s &nbsp;&middot;&nbsp;
-  <a href="/log" style="color:var(--dimamber);text-decoration:none;">JSON</a> &nbsp;&middot;&nbsp;
-  <a href="/status" style="color:var(--dimamber);text-decoration:none;">status</a>
-</p>
+<div class="toast" id="toast"></div>
 
 <script>
-  // ── Toast ─────────────────────────────────────────────────
-  let _toastTimer = null;
+  let _toastTimer;
+
   function showToast(msg, type) {
     const t = document.getElementById('toast');
     t.textContent = msg;
@@ -513,54 +376,32 @@ _PAGE_HTML = """<!DOCTYPE html>
     _toastTimer = setTimeout(() => t.className = 'toast', 2800);
   }
 
-  // ── Auto toggle ───────────────────────────────────────────
   function toggleAuto(checked) {
     const label = document.getElementById('auto-label');
     label.textContent = checked ? 'AUTO ON' : 'AUTO OFF';
     label.className   = 'toggle-label ' + (checked ? 'on' : 'off');
-
     fetch('/capture/auto', {
-      method:  'POST',
+      method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({enabled: checked})
+      body: JSON.stringify({enabled: checked})
     })
     .then(r => r.json())
-    .then(d => showToast(d.auto_enabled ? 'Auto capture ON' : 'Auto capture OFF',
+    .then(d => showToast(d.auto_enabled ? 'Auto ON' : 'Auto OFF',
                          d.auto_enabled ? 'ok' : 'warn'))
     .catch(() => showToast('Toggle failed', 'err'));
   }
 
-  // ── Overlay toggle ────────────────────────────────────────
-  function toggleOverlay(checked) {
-    const label = document.getElementById('overlay-label');
-    label.textContent = checked ? 'OVERLAY ON' : 'OVERLAY OFF';
-    label.className   = 'toggle-label ' + (checked ? 'on' : 'off');
-
-    fetch('/overlay/toggle', {
-      method:  'POST',
-      headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify({enabled: checked})
-    })
-    .then(r => r.json())
-    .then(d => showToast(d.overlay_enabled ? 'Overlay ON' : 'Overlay OFF',
-                         d.overlay_enabled ? 'ok' : 'warn'))
-    .catch(() => showToast('Toggle failed', 'err'));
-  }
-
-  // ── Manual capture ────────────────────────────────────────
   let _captureCooldown = false;
 
   function manualCapture() {
     if (_captureCooldown) { showToast('Cooldown active — wait', 'warn'); return; }
-
     const btn = document.getElementById('btn-manual');
     btn.disabled    = true;
-    btn.textContent = '⏳ Capturing...';
-
-    fetch('/capture/now', { method: 'POST' })
+    btn.textContent = '⏳ Sending...';
+    fetch('/capture/now', {method: 'POST'})
       .then(r => r.json())
       .then(() => {
-        showToast('Capture queued — processing...', 'ok');
+        showToast('Frame sent to laptop...', 'ok');
         _captureCooldown = true;
         setTimeout(() => {
           _captureCooldown    = false;
@@ -575,41 +416,34 @@ _PAGE_HTML = """<!DOCTYPE html>
       });
   }
 
-  // ── Status refresh (every 3s) ─────────────────────────────
   function refreshStatus() {
     fetch('/status')
       .then(r => r.json())
       .then(s => {
-        // caption status
-        const cs = document.getElementById('s-capstat');
-        if (cs) cs.textContent = s.caption_status || 'IDLE';
+        const ai = document.getElementById('s-aistatus');
+        if (ai) ai.textContent = s.ai_status || 'IDLE';
 
-        // FPS
         const fps = document.getElementById('s-fps');
         if (fps) fps.textContent = s.fps;
 
-        // motion count
         const mc = document.getElementById('s-motion');
         if (mc) {
           mc.textContent = s.motion_count + ' events';
           mc.className   = 'val ' + (s.motion_count > 0 ? 'red' : '');
         }
 
-        // latest caption preview (truncated)
-        const lc = document.getElementById('s-latest');
-        if (lc && s.latest_caption) {
-          const txt = s.latest_caption.replace('[manual] ', '');
-          lc.textContent = txt.length > 60 ? txt.slice(0, 57) + '...' : txt;
+        const desc = document.getElementById('s-description');
+        if (desc && s.latest_description) {
+          const txt = s.latest_description;
+          desc.textContent = txt.length > 120 ? txt.slice(0, 117) + '...' : txt;
         }
 
-        // motion border flash on video
         const vs = document.getElementById('video-section');
         if (vs) {
           if (s.motion) vs.classList.add('motion-active');
           else          vs.classList.remove('motion-active');
         }
 
-        // sync auto toggle if server state diverged
         const toggle = document.getElementById('auto-toggle');
         if (toggle && toggle.checked !== s.auto_enabled) {
           toggle.checked = s.auto_enabled;
@@ -617,20 +451,10 @@ _PAGE_HTML = """<!DOCTYPE html>
           label.textContent = s.auto_enabled ? 'AUTO ON' : 'AUTO OFF';
           label.className   = 'toggle-label ' + (s.auto_enabled ? 'on' : 'off');
         }
-
-        // sync overlay toggle
-        const ovToggle = document.getElementById('overlay-toggle');
-        if (ovToggle && s.overlay_enabled !== undefined && ovToggle.checked !== s.overlay_enabled) {
-          ovToggle.checked = s.overlay_enabled;
-          const ovLabel    = document.getElementById('overlay-label');
-          ovLabel.textContent = s.overlay_enabled ? 'OVERLAY ON' : 'OVERLAY OFF';
-          ovLabel.className   = 'toggle-label ' + (s.overlay_enabled ? 'on' : 'off');
-        }
       })
       .catch(() => {});
   }
 
-  // ── Log refresh (every 5s) ────────────────────────────────
   function refreshLog() {
     fetch('/log')
       .then(r => r.json())
@@ -638,31 +462,30 @@ _PAGE_HTML = """<!DOCTYPE html>
         document.getElementById('last-refresh').textContent =
           'refreshed ' + new Date().toLocaleTimeString();
         document.getElementById('log-count').textContent =
-          'Caption Log \u2014 ' + entries.length + ' entries (newest first)';
+          'Caption Log — ' + entries.length + ' entries (newest first)';
 
         const container = document.getElementById('log-rows');
         if (entries.length === 0) {
           container.innerHTML =
-            '<div class="empty">No captions yet.<br>Waiting for motion or manual capture...</div>';
+            '<div class="empty">No descriptions yet.<br>Waiting for motion or manual capture...</div>';
           return;
         }
 
-        container.innerHTML = entries.map((e, i) => {
-          const isManual = e.caption.startsWith('[manual]');
-          const isError  = e.caption.startsWith('[error') || e.caption.startsWith('[model');
-          const capText  = isManual ? e.caption.replace('[manual] ', '') : e.caption;
-          const capClass = isError ? 'entry-caption error' : 'entry-caption';
-          const tag      = isManual ? '<span class="tag-manual">MANUAL</span>' : '';
-          const thumb    = e.thumb_b64
+        container.innerHTML = entries.map(e => {
+          const isError   = e.tag === 'error';
+          const descClass = isError ? 'entry-description error' : 'entry-description';
+          let tagHtml = '';
+          if (e.tag === 'manual') tagHtml = '<span class="tag-manual">MANUAL</span>';
+          if (e.tag === 'error')  tagHtml = '<span class="tag-error">ERROR</span>';
+          const thumb = e.thumb_b64
             ? '<img src="data:image/jpeg;base64,' + e.thumb_b64 + '" alt="frame">'
             : '<div class="no-thumb">no<br>frame</div>';
-
           return (
             '<div class="entry">' +
               '<div class="thumb">' + thumb + '</div>' +
               '<div class="entry-body">' +
-                '<div class="entry-meta">' + e.time_str + tag + '</div>' +
-                '<div class="' + capClass + '">' + capText + '</div>' +
+                '<div class="entry-meta">' + e.time_str + tagHtml + '</div>' +
+                '<div class="' + descClass + '">' + e.description + '</div>' +
               '</div>' +
             '</div>'
           );
@@ -674,7 +497,6 @@ _PAGE_HTML = """<!DOCTYPE html>
   setInterval(refreshStatus, 3000);
   setInterval(refreshLog,    5000);
 </script>
-
 </body>
 </html>
 """
@@ -684,20 +506,22 @@ def _fmt_ts(ts):
     return datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S")
 
 
-def _render_page_html():
+def _render_page():
     s       = _state.get_status()
     entries = _log.get_all()
 
     if not entries:
-        rows_html = '<div class="empty">No captions yet.<br>Waiting for motion or manual capture...</div>'
+        rows_html = '<div class="empty">No descriptions yet.<br>Waiting for motion or manual capture...</div>'
     else:
         rows = []
         for e in entries:
-            is_manual = e["caption"].startswith("[manual]")
-            is_err    = e["caption"].startswith("[error") or e["caption"].startswith("[model")
-            cap_text  = e["caption"].replace("[manual] ", "") if is_manual else e["caption"]
-            cap_cls   = "entry-caption error" if is_err else "entry-caption"
-            tag       = '<span class="tag-manual">MANUAL</span>' if is_manual else ""
+            is_error  = e["tag"] == "error"
+            desc_cls  = "entry-description error" if is_error else "entry-description"
+            tag_html  = ""
+            if e["tag"] == "manual":
+                tag_html = '<span class="tag-manual">MANUAL</span>'
+            elif e["tag"] == "error":
+                tag_html = '<span class="tag-error">ERROR</span>'
             thumb_html = (
                 f'<img src="data:image/jpeg;base64,{e["thumb_b64"]}" alt="frame">'
                 if e["thumb_b64"] else '<div class="no-thumb">no<br>frame</div>'
@@ -706,56 +530,54 @@ def _render_page_html():
                 f'<div class="entry">'
                 f'<div class="thumb">{thumb_html}</div>'
                 f'<div class="entry-body">'
-                f'<div class="entry-meta">{_fmt_ts(e["timestamp"])}{tag}</div>'
-                f'<div class="{cap_cls}">{cap_text}</div>'
+                f'<div class="entry-meta">{_fmt_ts(e["timestamp"])}{tag_html}</div>'
+                f'<div class="{desc_cls}">{e["description"]}</div>'
                 f'</div></div>'
             )
         rows_html = "\n".join(rows)
 
-    mc         = s.get("motion_count", 0)
-    mc_class   = "val red" if mc > 0 else "val"
-    latest_cap = s.get("latest_caption") or "none yet"
-    if latest_cap and len(latest_cap) > 60:
-        latest_cap = latest_cap[:57] + "..."
+    mc          = s.get("motion_count", 0)
+    mc_class    = "val red" if mc > 0 else "val"
+    latest_desc = s.get("latest_description") or "none yet"
+    if len(latest_desc) > 120:
+        latest_desc = latest_desc[:117] + "..."
+
+    auto_checked = "checked" if _sender_mod.auto_enabled else ""
+    auto_text    = "AUTO ON" if _sender_mod.auto_enabled else "AUTO OFF"
+    auto_class   = "on" if _sender_mod.auto_enabled else "off"
 
     html = _PAGE_HTML
-    html = html.replace("__CAP_STATUS__",     s.get("caption_status", "IDLE"))
-    html = html.replace("__MOTION_COUNT__",   str(mc))
-    html = html.replace("__MC_CLASS__",       mc_class)
-    html = html.replace("__FPS__",            str(s.get("fps", 0.0)))
-    html = html.replace("__ENTRY_COUNT__",    str(len(entries)))
-    html = html.replace("__LOG_ROWS__",       rows_html)
-    html = html.replace("__LOAD_TIME__",      datetime.datetime.now().strftime("%H:%M:%S"))
-    html = html.replace("__LATEST_CAPTION__", latest_cap)
-    html = html.replace("__AUTO_ENABLED_JS__","true" if _caption_mod.auto_enabled else "false")
+    html = html.replace("__AI_STATUS__",          s.get("ai_status", "IDLE"))
+    html = html.replace("__MOTION_COUNT__",        str(mc))
+    html = html.replace("__MC_CLASS__",            mc_class)
+    html = html.replace("__FPS__",                 str(s.get("fps", 0.0)))
+    html = html.replace("__ENTRY_COUNT__",         str(len(entries)))
+    html = html.replace("__LOG_ROWS__",            rows_html)
+    html = html.replace("__LOAD_TIME__",           datetime.datetime.now().strftime("%H:%M:%S"))
+    html = html.replace("__LATEST_DESCRIPTION__",  latest_desc)
+    html = html.replace("__AUTO_CHECKED__",        auto_checked)
+    html = html.replace("__AUTO_TEXT__",           auto_text)
+    html = html.replace("__AUTO_CLASS__",          auto_class)
     return html
 
 
 @app.route("/")
 @app.route("/stream")
 def main_ui():
-    return Response(_render_page_html(), mimetype="text/html")
+    return Response(_render_page(), mimetype="text/html")
 
 
-# ── Start ─────────────────────────────────────────────────────
-
-def start_stream(state, log, port=5000):
-    """
-    Start Flask in a daemon thread.
-    state — DetectionState
-    log   — CaptionLog
-    port  — Flask port (default 5000)
-    """
+def start_stream(state, log, port=80):
     global _state, _log
     _state = state
     _log   = log
 
     t = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=port,
-                               debug=False, use_reloader=False),
-        daemon=True
+        target=lambda: app.run(
+            host="0.0.0.0", port=port, debug=False, use_reloader=False
+        ),
+        daemon=True,
     )
     t.start()
     print(f"[stream] Flask running on port {port}")
-    print(f"[stream] UI at http://<ip>:{port}/stream")
     return t

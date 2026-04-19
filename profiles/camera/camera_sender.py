@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""
+BearBox Camera — AI Sender
+
+Watches for motion, captures a JPEG snapshot, and POSTs it to the
+laptop's BearBox server for Moondream/Ollama description.
+Logs the natural language result back to CaptionLog.
+
+Auto-discovery:
+  On startup the sender scans the local /24 subnet for a host responding
+  to GET /beacon with {"service": "bearbox-server"}. No IP config needed.
+  If laptop_ip is set in config.json it is tried first before scanning.
+  If the server disappears mid-session, the sender rescans automatically.
+
+Flow:
+  1. Discover laptop server on LAN
+  2. Wait for motion confirmation window to pass
+  3. Grab snapshot → encode JPEG → POST to laptop /describe
+  4. Laptop returns natural language description → log it
+  5. If laptop unreachable → drop frame, log error, rescan for server
+  6. Cooldown starts after send completes
+
+Controls (toggled via camera_stream.py endpoints):
+  auto_enabled   — bool, enables motion-triggered sends
+  manual_trigger — bool, set True to fire one manual send
+"""
+
+import cv2
+import time
+import base64
+import socket
+import threading
+import ipaddress
+import requests
+from collections import deque
+
+# ── Public control flags ───────────────────────────────────────
+auto_enabled   = False
+manual_trigger = False
+
+# ── Constants ──────────────────────────────────────────────────
+SEND_COOLDOWN    = 15.0   # seconds between auto sends
+BEACON_TIMEOUT   = 0.3    # seconds per host during LAN scan
+RESCAN_INTERVAL  = 30.0   # seconds between rescans when server not found
+
+
+# ── Caption Log ────────────────────────────────────────────────
+
+class CaptionLog:
+    MAX_ENTRIES = 20
+
+    def __init__(self):
+        self._lock    = threading.Lock()
+        self._entries = deque(maxlen=self.MAX_ENTRIES)
+
+    def append(self, description: str, frame=None, tag=None):
+        """
+        Add a new log entry.
+        description : natural language text from Moondream (or error string)
+        frame       : numpy BGR frame to encode as thumbnail (optional)
+        tag         : "manual" | "auto" | "error"
+        """
+        thumb_b64 = None
+        if frame is not None:
+            try:
+                thumb     = cv2.resize(frame, (160, 90))
+                ok, buf   = cv2.imencode(
+                    ".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60]
+                )
+                if ok:
+                    thumb_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+            except Exception:
+                pass
+
+        entry = {
+            "timestamp":   time.time(),
+            "description": description,
+            "thumb_b64":   thumb_b64,
+            "tag":         tag or "auto",
+        }
+        with self._lock:
+            self._entries.append(entry)
+        print(f"[sender] LOG [{entry['tag']}]: {description}")
+
+    def get_all(self):
+        with self._lock:
+            return list(reversed(self._entries))
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+# ── LAN discovery ──────────────────────────────────────────────
+
+def _get_local_ip() -> str:
+    """Get this device's LAN IP by opening a dummy UDP socket."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _check_beacon(ip: str, port: int, timeout: float) -> bool:
+    """Return True if this host is running the BearBox server beacon."""
+    try:
+        r = requests.get(
+            f"http://{ip}:{port}/beacon",
+            timeout=timeout
+        )
+        return r.ok and r.json().get("service") == "bearbox-server"
+    except Exception:
+        return False
+
+
+def _scan_for_server(port: int, hint_ip: str = "") -> str | None:
+    """
+    Scan the local /24 subnet for a BearBox server.
+    Tries hint_ip first if provided (e.g. laptop_ip from config).
+    Returns 'http://x.x.x.x:port' or None.
+    """
+    # Try the hint first — saves a full scan if it's correct
+    if hint_ip:
+        print(f"[sender] Trying hint IP {hint_ip}...")
+        if _check_beacon(hint_ip, port, timeout=1.0):
+            print(f"[sender] Found server at hint IP {hint_ip}")
+            return f"http://{hint_ip}:{port}"
+
+    local_ip = _get_local_ip()
+    subnet   = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
+    print(f"[sender] Scanning {subnet} for BearBox server on port {port}...")
+
+    for host in subnet.hosts():
+        ip = str(host)
+        if ip == local_ip:
+            continue
+        if _check_beacon(ip, port, BEACON_TIMEOUT):
+            print(f"[sender] Found server at {ip}")
+            return f"http://{ip}:{port}"
+
+    print("[sender] No BearBox server found on LAN")
+    return None
+
+
+# ── HTTP sender ────────────────────────────────────────────────
+
+def _send_frame(frame, laptop_url: str, timeout: int, prompt: str) -> str:
+    """
+    Encode frame as JPEG and POST to laptop /describe.
+    Returns description string on success, raises on failure.
+    """
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        raise RuntimeError("Failed to encode frame as JPEG")
+
+    b64     = base64.b64encode(buf.tobytes()).decode("ascii")
+    payload = {
+        "image":    b64,
+        "prompt":   prompt,
+        "metadata": {"source": "bearbox", "timestamp": time.time()},
+    }
+
+    resp = requests.post(f"{laptop_url}/describe", json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json().get("description", "no description returned")
+
+
+# ── Sender thread ──────────────────────────────────────────────
+
+def run_sender(state, log: CaptionLog, config: dict):
+    """
+    Main sender loop. Runs as a daemon thread.
+
+    config keys (all under 'camera' block in config.json):
+        laptop_ip         : str   — optional hint IP to try first
+        laptop_port       : int   — server port              (default 5000)
+        ai_timeout        : int   — HTTP timeout seconds     (default 30)
+        ai_prompt         : str   — prompt sent with image   (optional)
+        confirm_window    : int   — rolling window size       (default 5)
+        confirm_hits      : int   — required motion frames    (default 3)
+        min_motion_area   : int   — minimum contour area px² (default 2000)
+    """
+    global manual_trigger
+
+    hint_ip         = config.get("laptop_ip",      "")
+    port            = config.get("laptop_port",    5000)
+    timeout         = config.get("ai_timeout",     30)
+    prompt          = config.get(
+        "ai_prompt",
+        "Describe what you see. Focus on any animals, people, or unusual activity."
+    )
+    confirm_window  = config.get("confirm_window",  5)
+    confirm_hits    = config.get("confirm_hits",    3)
+    min_motion_area = config.get("min_motion_area", 2000)
+
+    print(
+        f"[sender] Started — port {port}, "
+        f"confirm {confirm_hits}/{confirm_window} frames, "
+        f"min area {min_motion_area}px²"
+    )
+
+    # ── Discover server ────────────────────────────────────────
+    laptop_url    = None
+    last_scan_ts  = 0.0
+
+    def _try_discover():
+        nonlocal laptop_url, last_scan_ts
+        state.ai_status = "SEARCHING..."
+        url = _scan_for_server(port, hint_ip)
+        last_scan_ts = time.time()
+        if url:
+            laptop_url      = url
+            state.ai_status = "IDLE" if auto_enabled else "AUTO OFF"
+            print(f"[sender] Server locked: {laptop_url}")
+        else:
+            laptop_url      = None
+            state.ai_status = "NO CONNECTION"
+
+    _try_discover()
+
+    motion_history = deque(maxlen=confirm_window)
+    last_send_ts   = 0.0
+    busy           = False
+
+    while state.running:
+        time.sleep(0.25)
+
+        # Rescan if no server and rescan interval elapsed
+        if laptop_url is None:
+            if time.time() - last_scan_ts >= RESCAN_INTERVAL:
+                _try_discover()
+            continue
+
+        status      = state.get_status()
+        now         = time.time()
+        on_cooldown = (now - last_send_ts) < SEND_COOLDOWN
+
+        motion_history.append(status["motion"])
+        motion_hits = sum(motion_history)
+
+        # ── Manual trigger ─────────────────────────────────────
+        fired_manual = False
+        if manual_trigger:
+            manual_trigger = False
+            if busy:
+                print("[sender] Manual trigger ignored — send in progress")
+            elif on_cooldown:
+                remaining = int(SEND_COOLDOWN - (now - last_send_ts))
+                print(f"[sender] Manual trigger ignored — cooldown ({remaining}s left)")
+                state.ai_status = "COOLDOWN"
+            else:
+                fired_manual = True
+                print("[sender] Manual send triggered")
+
+        # ── Auto trigger ───────────────────────────────────────
+        fired_auto = False
+        if (not fired_manual
+                and auto_enabled
+                and not busy
+                and not on_cooldown):
+
+            confirmed = (
+                len(motion_history) == confirm_window
+                and motion_hits >= confirm_hits
+                and status["motion_area"] >= min_motion_area
+            )
+
+            if confirmed:
+                fired_auto = True
+                motion_history.clear()
+                print(
+                    f"[sender] Motion confirmed — "
+                    f"{motion_hits}/{confirm_window} frames, "
+                    f"area={status['motion_area']}px²"
+                )
+
+        if not fired_manual and not fired_auto:
+            if not busy and not on_cooldown:
+                state.ai_status = "IDLE" if auto_enabled else "AUTO OFF"
+            continue
+
+        # ── Fire send in worker thread ─────────────────────────
+        busy  = True
+        frame = state.get_frame()
+        tag   = "manual" if fired_manual else "auto"
+        url   = laptop_url  # snapshot the URL in case it changes
+
+        def _do_send(frame_copy, send_tag, send_url):
+            nonlocal busy, last_send_ts, laptop_url
+
+            try:
+                state.ai_status = "SENDING..."
+                print(f"[sender] POSTing to {send_url}/describe ...")
+
+                description = _send_frame(frame_copy, send_url, timeout, prompt)
+
+                last_send_ts            = time.time()
+                state.latest_description = description
+                state.ai_status         = "IDLE" if auto_enabled else "AUTO OFF"
+                log.append(description, frame_copy, tag=send_tag)
+
+            except requests.exceptions.ConnectionError:
+                print(f"[sender] Could not reach {send_url} — will rescan")
+                state.ai_status = "NO CONNECTION"
+                laptop_url      = None   # triggers rescan on next loop
+                last_scan_ts    = 0.0
+                log.append("[laptop unreachable — frame dropped]", frame_copy, tag="error")
+
+            except requests.exceptions.Timeout:
+                print(f"[sender] Laptop timed out after {timeout}s — dropping")
+                state.ai_status = "TIMEOUT"
+                log.append("[laptop timed out — frame dropped]", frame_copy, tag="error")
+
+            except Exception as ex:
+                print(f"[sender] Unexpected error: {ex}")
+                state.ai_status = "ERROR"
+                log.append(f"[error: {ex}]", frame_copy, tag="error")
+
+            finally:
+                busy = False
+
+        threading.Thread(
+            target=_do_send, args=(frame, tag, url), daemon=True
+        ).start()
+
+    print("[sender] Sender thread stopped")
