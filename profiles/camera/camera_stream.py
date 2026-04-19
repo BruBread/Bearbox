@@ -438,9 +438,9 @@ _PAGE_HTML = """<!DOCTYPE html>
   <span class="controls-label">AI Capture</span>
 
   <div class="toggle-wrap">
-    <span class="toggle-label on" id="auto-label">AUTO ON</span>
+    <span class="toggle-label __AUTO_LABEL_CLASS__" id="auto-label">__AUTO_LABEL_TEXT__</span>
     <label class="switch">
-      <input type="checkbox" id="auto-toggle" checked onchange="toggleAuto(this.checked)">
+      <input type="checkbox" id="auto-toggle" __AUTO_CHECKED__ onchange="toggleAuto(this.checked)">
       <span class="slider"></span>
     </label>
   </div>
@@ -676,7 +676,10 @@ def _render_page_html():
     html = html.replace("__LOG_ROWS__",       rows_html)
     html = html.replace("__LOAD_TIME__",      datetime.datetime.now().strftime("%H:%M:%S"))
     html = html.replace("__LATEST_CAPTION__", latest_cap)
-    html = html.replace("__AUTO_ENABLED_JS__","true" if _caption_mod.auto_enabled else "false")
+    html = html.replace("__AUTO_ENABLED_JS__",  "true" if _caption_mod.auto_enabled else "false")
+    html = html.replace("__AUTO_LABEL_CLASS__", "on" if _caption_mod.auto_enabled else "off")
+    html = html.replace("__AUTO_LABEL_TEXT__",  "AUTO ON" if _caption_mod.auto_enabled else "AUTO OFF")
+    html = html.replace("__AUTO_CHECKED__",     "checked" if _caption_mod.auto_enabled else "")
     return html
 
 

@@ -33,7 +33,7 @@ import base64
 from collections import deque
 
 # ── Public control flags (written by camera_stream, read by run_captioning) ──
-auto_enabled   = True   # toggle auto motion-triggered captioning
+auto_enabled   = False  # toggle auto motion-triggered captioning (off by default)
 manual_trigger = False  # set True to fire one capture immediately
 
 # ── Caption Log ───────────────────────────────────────────────
@@ -167,9 +167,31 @@ def run_captioning(state, log: CaptionLog):
                     state.caption_status = "LOADING MODEL..."
                     try:
                         import moondream as md
-                        model = md.vl(model="moondream-2b-int8.mf")
+                        import os as _os
+                        _mf_path = "moondream-2b-int8.mf"
+                        # Check the model file exists locally before calling md.vl().
+                        # If it's missing, the moondream library silently falls back
+                        # to cloud inference which returns HTTP 401 Unauthorized.
+                        if not _os.path.isfile(_mf_path):
+                            # Try common absolute locations
+                            _candidates = [
+                                "/home/bearbox/models/moondream-2b-int8.mf",
+                                "/home/bearbox/bearbox/models/moondream-2b-int8.mf",
+                                _os.path.join(_os.path.dirname(__file__), "moondream-2b-int8.mf"),
+                            ]
+                            for _c in _candidates:
+                                if _os.path.isfile(_c):
+                                    _mf_path = _c
+                                    break
+                            else:
+                                raise FileNotFoundError(
+                                    "moondream-2b-int8.mf not found. "
+                                    "Download it and place it at one of: "
+                                    + ", ".join(_candidates)
+                                )
+                        model = md.vl(model=_mf_path)
                         processor = None
-                        print("[caption] moondream2 loaded (moondream library)")
+                        print(f"[caption] moondream2 loaded from {_mf_path} (moondream library)")
                     except Exception as e_md:
                         print(f"[caption] moondream lib failed ({e_md}), trying transformers...")
                         try:
