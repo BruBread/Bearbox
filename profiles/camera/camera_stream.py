@@ -24,6 +24,10 @@ app    = Flask(__name__)
 _state = None
 _log   = None
 
+# Capture timer — set when capture is fired, cleared when description arrives
+_capture_start_ts = None
+_capture_lock     = threading.Lock()
+
 
 # ── MJPEG feed ─────────────────────────────────────────────────
 
@@ -54,6 +58,13 @@ def feed():
 @app.route("/status")
 def status():
     s = _state.get_status()
+
+    # Calculate elapsed time if a capture is in progress
+    with _capture_lock:
+        elapsed = None
+        if _capture_start_ts is not None:
+            elapsed = round(time.time() - _capture_start_ts, 1)
+
     return jsonify({
         "motion":             s["motion"],
         "motion_count":       s["motion_count"],
@@ -62,6 +73,7 @@ def status():
         "ai_status":          s["ai_status"],
         "latest_description": s["latest_description"],
         "auto_enabled":       _sender_mod.auto_enabled,
+        "capture_elapsed":    elapsed,   # seconds since capture fired, or null
     })
 
 
@@ -69,6 +81,9 @@ def status():
 
 @app.route("/capture/now", methods=["POST"])
 def capture_now():
+    global _capture_start_ts
+    with _capture_lock:
+        _capture_start_ts = time.time()
     _sender_mod.manual_trigger = True
     return jsonify({"ok": True, "message": "Manual capture queued"})
 
@@ -95,6 +110,7 @@ def log_json():
         "description": e["description"],
         "thumb_b64":   e["thumb_b64"],
         "tag":         e["tag"],
+        "elapsed":     e.get("elapsed"),   # seconds the inference took
     } for e in entries])
 
 
@@ -279,6 +295,10 @@ _PAGE_HTML = """<!DOCTYPE html>
     margin-bottom: 4px;
     display: flex; align-items: center; gap: 6px;
   }
+  .entry-elapsed {
+    font-size: 0.6rem; color: var(--dimamber);
+    margin-left: auto;
+  }
   .entry-description {
     font-size: 0.78rem; color: var(--white);
     line-height: 1.45; word-break: break-word;
@@ -311,6 +331,13 @@ _PAGE_HTML = """<!DOCTYPE html>
   .toast.ok   { background: #003820; border: 1px solid var(--green); color: var(--green); }
   .toast.warn { background: #1a0e00; border: 1px solid var(--amber); color: var(--amber); }
   .toast.err  { background: #1a0000; border: 1px solid var(--red);   color: var(--red);   }
+
+  /* timer pill shown next to button while sending */
+  .capture-timer {
+    font-size: 0.72rem; color: var(--amber);
+    display: none;
+  }
+  .capture-timer.active { display: inline; }
 </style>
 </head>
 <body>
@@ -333,6 +360,7 @@ _PAGE_HTML = """<!DOCTYPE html>
     <span class="toggle-label __AUTO_CLASS__" id="auto-label">__AUTO_TEXT__</span>
   </div>
   <button class="btn" id="btn-manual" onclick="manualCapture()">▶ Capture Now</button>
+  <span class="capture-timer" id="capture-timer">⏱ <span id="timer-val">0</span>s</span>
 </div>
 
 <div class="status-bar">
@@ -391,7 +419,28 @@ _PAGE_HTML = """<!DOCTYPE html>
     .catch(() => showToast('Toggle failed', 'err'));
   }
 
+  // ── Capture timer ───────────────────────────────────────────
+  let _captureStarted  = null;
+  let _timerInterval   = null;
   let _captureCooldown = false;
+
+  function startCaptureTimer() {
+    _captureStarted = Date.now();
+    const timerEl   = document.getElementById('capture-timer');
+    const valEl     = document.getElementById('timer-val');
+    timerEl.classList.add('active');
+    _timerInterval = setInterval(() => {
+      const secs = ((Date.now() - _captureStarted) / 1000).toFixed(1);
+      valEl.textContent = secs;
+    }, 100);
+  }
+
+  function stopCaptureTimer() {
+    clearInterval(_timerInterval);
+    const timerEl = document.getElementById('capture-timer');
+    timerEl.classList.remove('active');
+    _captureStarted = null;
+  }
 
   function manualCapture() {
     if (_captureCooldown) { showToast('Cooldown active — wait', 'warn'); return; }
@@ -402,19 +451,25 @@ _PAGE_HTML = """<!DOCTYPE html>
       .then(r => r.json())
       .then(() => {
         showToast('Frame sent to laptop...', 'ok');
+        startCaptureTimer();
         _captureCooldown = true;
         setTimeout(() => {
           _captureCooldown    = false;
           btn.disabled        = false;
           btn.textContent     = '▶ Capture Now';
+          stopCaptureTimer();
         }, 15000);
       })
       .catch(() => {
         showToast('Capture failed', 'err');
         btn.disabled    = false;
         btn.textContent = '▶ Capture Now';
+        stopCaptureTimer();
       });
   }
+
+  // ── Status polling ──────────────────────────────────────────
+  let _lastAiStatus = '';
 
   function refreshStatus() {
     fetch('/status')
@@ -422,6 +477,12 @@ _PAGE_HTML = """<!DOCTYPE html>
       .then(s => {
         const ai = document.getElementById('s-aistatus');
         if (ai) ai.textContent = s.ai_status || 'IDLE';
+
+        // Stop timer when AI status leaves SENDING...
+        if (_lastAiStatus === 'SENDING...' && s.ai_status !== 'SENDING...') {
+          stopCaptureTimer();
+        }
+        _lastAiStatus = s.ai_status;
 
         const fps = document.getElementById('s-fps');
         if (fps) fps.textContent = s.fps;
@@ -477,6 +538,12 @@ _PAGE_HTML = """<!DOCTYPE html>
           let tagHtml = '';
           if (e.tag === 'manual') tagHtml = '<span class="tag-manual">MANUAL</span>';
           if (e.tag === 'error')  tagHtml = '<span class="tag-error">ERROR</span>';
+
+          // Show elapsed time if available
+          const elapsedHtml = e.elapsed
+            ? '<span class="entry-elapsed">' + e.elapsed.toFixed(1) + 's</span>'
+            : '';
+
           const thumb = e.thumb_b64
             ? '<img src="data:image/jpeg;base64,' + e.thumb_b64 + '" alt="frame">'
             : '<div class="no-thumb">no<br>frame</div>';
@@ -484,7 +551,7 @@ _PAGE_HTML = """<!DOCTYPE html>
             '<div class="entry">' +
               '<div class="thumb">' + thumb + '</div>' +
               '<div class="entry-body">' +
-                '<div class="entry-meta">' + e.time_str + tagHtml + '</div>' +
+                '<div class="entry-meta">' + e.time_str + tagHtml + elapsedHtml + '</div>' +
                 '<div class="' + descClass + '">' + e.description + '</div>' +
               '</div>' +
             '</div>'
@@ -494,7 +561,7 @@ _PAGE_HTML = """<!DOCTYPE html>
       .catch(() => {});
   }
 
-  setInterval(refreshStatus, 3000);
+  setInterval(refreshStatus, 2000);
   setInterval(refreshLog,    5000);
 </script>
 </body>
@@ -522,6 +589,10 @@ def _render_page():
                 tag_html = '<span class="tag-manual">MANUAL</span>'
             elif e["tag"] == "error":
                 tag_html = '<span class="tag-error">ERROR</span>'
+            elapsed_html = (
+                f'<span class="entry-elapsed">{e["elapsed"]:.1f}s</span>'
+                if e.get("elapsed") else ""
+            )
             thumb_html = (
                 f'<img src="data:image/jpeg;base64,{e["thumb_b64"]}" alt="frame">'
                 if e["thumb_b64"] else '<div class="no-thumb">no<br>frame</div>'
@@ -530,7 +601,7 @@ def _render_page():
                 f'<div class="entry">'
                 f'<div class="thumb">{thumb_html}</div>'
                 f'<div class="entry-body">'
-                f'<div class="entry-meta">{_fmt_ts(e["timestamp"])}{tag_html}</div>'
+                f'<div class="entry-meta">{_fmt_ts(e["timestamp"])}{tag_html}{elapsed_html}</div>'
                 f'<div class="{desc_cls}">{e["description"]}</div>'
                 f'</div></div>'
             )

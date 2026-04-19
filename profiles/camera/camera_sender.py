@@ -57,12 +57,13 @@ class CaptionLog:
         self._lock    = threading.Lock()
         self._entries = deque(maxlen=self.MAX_ENTRIES)
 
-    def append(self, description: str, frame=None, tag=None):
+    def append(self, description: str, frame=None, tag=None, elapsed=None):
         """
         Add a new log entry.
         description : natural language text from llava-phi3 (or error string)
         frame       : numpy BGR frame to encode as thumbnail (optional)
         tag         : "manual" | "auto" | "error"
+        elapsed     : seconds the inference took (float, optional)
         """
         thumb_b64 = None
         if frame is not None:
@@ -81,6 +82,7 @@ class CaptionLog:
             "description": description,
             "thumb_b64":   thumb_b64,
             "tag":         tag or "auto",
+            "elapsed":     elapsed,
         }
         with self._lock:
             self._entries.append(entry)
@@ -302,6 +304,7 @@ def run_sender(state, log: CaptionLog, config: dict):
 
             try:
                 state.ai_status = "SENDING..."
+                send_start = time.time()
                 print(
                     f"[sender] POSTing {SEND_WIDTH}x{SEND_HEIGHT} "
                     f"frame to {send_url}/describe ..."
@@ -309,10 +312,12 @@ def run_sender(state, log: CaptionLog, config: dict):
 
                 description = _send_frame(frame_copy, send_url, timeout, prompt)
 
+                elapsed                  = round(time.time() - send_start, 1)
                 last_send_ts             = time.time()
                 state.latest_description = description
                 state.ai_status          = "IDLE" if auto_enabled else "AUTO OFF"
-                log.append(description, frame_copy, tag=send_tag)
+                print(f"[sender] Done in {elapsed}s")
+                log.append(description, frame_copy, tag=send_tag, elapsed=elapsed)
 
             except requests.exceptions.ConnectionError:
                 print(f"[sender] Could not reach {send_url} — will rescan")
