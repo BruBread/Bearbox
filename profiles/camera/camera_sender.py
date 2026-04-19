@@ -204,6 +204,7 @@ def run_sender(state, log: CaptionLog, config: dict):
     confirm_hits    = config.get("confirm_hits",    3)
     min_motion_area = config.get("min_motion_area", 2000)
 
+
     print(
         f"[sender] Started — port {port}, "
         f"confirm {confirm_hits}/{confirm_window} frames, "
