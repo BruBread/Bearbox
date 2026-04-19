@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-BearBox Camera — AI Motion Captioning
+BearBox Camera — Object Detection Captioning
 
 Watches DetectionState for rising-edge motion events.
 On each new event (subject to cooldown), grabs the current frame,
-runs moondream2 locally to generate a natural-language description,
-and appends the result to CaptionLog.
+runs MobileNet SSD (via OpenCV DNN — no extra dependencies) to detect
+objects, and appends a natural description to CaptionLog.
+
+Examples:
+  "person detected (92%)"
+  "person + cat detected"
+  "motion detected — no objects identified"
 
 Flood protection:
   - Rising-edge only (one trigger per motion event, not per frame)
   - Hard cooldown between captions (default 15s, applies to both auto + manual)
   - Single worker — if inference is running, new events are skipped
-  - Lazy model load — moondream2 loads only on first trigger
+  - Model loads once on first trigger (~22MB, fast)
 
 Controls (set from camera_stream.py via this module's globals):
   auto_enabled   — bool, enables/disables automatic motion-triggered captioning
-  manual_trigger — bool, set True to fire one manual capture regardless of auto state
+  manual_trigger — bool, set True to fire one capture regardless of auto state
 
 Usage (from camera_main.py):
     from camera_caption import CaptionLog, run_captioning
@@ -30,11 +35,38 @@ import cv2
 import time
 import threading
 import base64
+import os
 from collections import deque
 
 # ── Public control flags (written by camera_stream, read by run_captioning) ──
 auto_enabled   = False  # toggle auto motion-triggered captioning (off by default)
 manual_trigger = False  # set True to fire one capture immediately
+
+# ── Model paths ───────────────────────────────────────────────
+_MODEL_DIR  = os.path.join(os.path.dirname(__file__), "models")
+_PROTOTXT   = os.path.join(_MODEL_DIR, "mobilenet_ssd.prototxt")
+_CAFFEMODEL = os.path.join(_MODEL_DIR, "mobilenet_ssd.caffemodel")
+
+# MobileNet SSD PASCAL VOC class labels
+_CLASSES = [
+    "background", "aeroplane", "bicycle", "bird", "boat",
+    "bottle", "bus", "car", "cat", "chair", "cow",
+    "diningtable", "dog", "horse", "motorbike", "person",
+    "pottedplant", "sheep", "sofa", "train", "tvmonitor",
+]
+
+# Only report these classes — ignore background clutter
+_INTERESTING = {
+    "person", "cat", "dog", "bird", "cow", "sheep", "horse",
+    "car", "bus", "motorbike", "bicycle", "boat", "train",
+}
+
+# Minimum confidence to report a detection
+_CONFIDENCE = 0.45
+
+# Cooldown between caption jobs in seconds
+CAPTION_COOLDOWN = 15.0
+
 
 # ── Caption Log ───────────────────────────────────────────────
 
@@ -66,9 +98,9 @@ class CaptionLog:
                 pass
 
         entry = {
-            "timestamp":  time.time(),
-            "caption":    caption,
-            "thumb_b64":  thumb_b64,
+            "timestamp": time.time(),
+            "caption":   caption,
+            "thumb_b64": thumb_b64,
         }
         with self._lock:
             self._entries.append(entry)
@@ -86,18 +118,6 @@ class CaptionLog:
 
 # ── Captioning Thread ─────────────────────────────────────────
 
-# Cooldown between caption jobs in seconds.
-# Applies to BOTH automatic and manual triggers — prevents spam.
-# Lower to 5.0 for demos/presentations.
-CAPTION_COOLDOWN = 15.0
-
-# moondream2 prompt — kept tight for surveillance context
-_PROMPT = (
-    "Describe in one short sentence what is happening in this image. "
-    "Focus on people, animals, or objects that are moving."
-)
-
-
 def run_captioning(state, log: CaptionLog):
     """
     Main caption loop. Runs in its own daemon thread.
@@ -106,16 +126,15 @@ def run_captioning(state, log: CaptionLog):
     """
     global manual_trigger
 
-    model        = None   # lazy load
-    processor    = None
-    last_count   = 0      # motion_count we last processed
-    last_run_ts  = 0.0    # time.time() of last inference start
-    busy         = False  # True while inference is running
+    net         = None   # lazy load
+    last_count  = 0
+    last_run_ts = 0.0
+    busy        = False
 
     print("[caption] Caption thread started — waiting for trigger...")
 
     while state.running:
-        time.sleep(0.25)  # polling interval — light on CPU
+        time.sleep(0.25)
 
         status      = state.get_status()
         cur_count   = status["motion_count"]
@@ -125,7 +144,7 @@ def run_captioning(state, log: CaptionLog):
         # ── Check for manual trigger ──────────────────────────
         fired_manual = False
         if manual_trigger:
-            manual_trigger = False          # consume the flag immediately
+            manual_trigger = False
             if busy:
                 print("[caption] Manual trigger ignored — inference running")
             elif on_cooldown:
@@ -142,10 +161,8 @@ def run_captioning(state, log: CaptionLog):
             if cur_count != last_count:
                 fired_auto = True
 
-        # Always sync last_count so stale events don't queue up
         last_count = cur_count
 
-        # Neither trigger fired → update idle status and loop
         if not fired_manual and not fired_auto:
             if not busy and not on_cooldown:
                 state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
@@ -159,67 +176,24 @@ def run_captioning(state, log: CaptionLog):
         state.caption_status = f"CAPTURED ({source})"
 
         def _infer(frame_copy, trigger_source):
-            nonlocal model, processor, busy
+            nonlocal net, busy
             try:
                 # ── Lazy model load ───────────────────────────
-                if model is None:
-                    print("[caption] Loading moondream2 — first trigger...")
+                if net is None:
+                    print("[caption] Loading MobileNet SSD...")
                     state.caption_status = "LOADING MODEL..."
-                    try:
-                        import moondream as md
-                        import os as _os
-                        _mf_path = "moondream-2b-int8.mf"
-                        # Check the model file exists locally before calling md.vl().
-                        # If it's missing, the moondream library silently falls back
-                        # to cloud inference which returns HTTP 401 Unauthorized.
-                        if not _os.path.isfile(_mf_path):
-                            # Try common absolute locations
-                            _candidates = [
-                                "/home/bearbox/models/moondream-2b-int8.mf",
-                                "/home/bearbox/bearbox/models/moondream-2b-int8.mf",
-                                _os.path.join(_os.path.dirname(__file__), "moondream-2b-int8.mf"),
-                            ]
-                            for _c in _candidates:
-                                if _os.path.isfile(_c):
-                                    _mf_path = _c
-                                    break
-                            else:
-                                raise FileNotFoundError(
-                                    "moondream-2b-int8.mf not found. "
-                                    "Download it and place it at one of: "
-                                    + ", ".join(_candidates)
-                                )
-                        model = md.vl(model=_mf_path)
-                        processor = None
-                        print(f"[caption] moondream2 loaded from {_mf_path} (moondream library)")
-                    except Exception as e_md:
-                        print(f"[caption] moondream lib failed ({e_md}), trying transformers...")
-                        try:
-                            from transformers import AutoModelForCausalLM, AutoTokenizer
-                            _mdname = "vikhyatk/moondream2"
-                            _rev    = "2025-01-09"
-                            processor = AutoTokenizer.from_pretrained(
-                                _mdname, revision=_rev, trust_remote_code=True
-                            )
-                            model = AutoModelForCausalLM.from_pretrained(
-                                _mdname, revision=_rev,
-                                trust_remote_code=True,
-                                low_cpu_mem_usage=True,
-                            )
-                            model.eval()
-                            print("[caption] moondream2 loaded (transformers)")
-                        except Exception as e_tr:
-                            print(f"[caption] ERROR: could not load moondream2: {e_tr}")
-                            state.caption_status = "ERROR"
-                            log.append("[model load failed]", frame_copy)
-                            busy = False
-                            return
+                    if not os.path.isfile(_PROTOTXT) or not os.path.isfile(_CAFFEMODEL):
+                        raise FileNotFoundError(
+                            f"Model files missing in {_MODEL_DIR}. "
+                            "Expected mobilenet_ssd.prototxt and mobilenet_ssd.caffemodel"
+                        )
+                    net = cv2.dnn.readNetFromCaffe(_PROTOTXT, _CAFFEMODEL)
+                    print("[caption] MobileNet SSD loaded")
 
-                # ── Run inference ─────────────────────────────
+                # ── Run detection ─────────────────────────────
                 state.caption_status = "PROCESSING..."
-                caption = _run_inference(model, processor, frame_copy)
+                caption = _run_detection(net, frame_copy)
 
-                # tag manual captures in the log so they're identifiable
                 if trigger_source == "MANUAL":
                     caption = f"[manual] {caption}"
 
@@ -228,52 +202,54 @@ def run_captioning(state, log: CaptionLog):
                 log.append(caption, frame_copy)
 
             except Exception as ex:
-                print(f"[caption] Inference error: {ex}")
+                print(f"[caption] Detection error: {ex}")
                 state.caption_status = "ERROR"
                 log.append(f"[error: {ex}]", frame_copy)
             finally:
                 busy = False
 
-        t = threading.Thread(
-            target=_infer, args=(frame, source), daemon=True
-        )
+        t = threading.Thread(target=_infer, args=(frame, source), daemon=True)
         t.start()
 
     print("[caption] Caption thread stopped")
 
 
-def _run_inference(model, processor, frame):
+def _run_detection(net, frame):
     """
-    Run moondream2 on a BGR numpy frame.
-    Handles both the official moondream library and the transformers path.
-    Returns a caption string.
+    Run MobileNet SSD on a BGR numpy frame.
+    Returns a human-readable string describing what was detected.
     """
-    from PIL import Image
+    blob = cv2.dnn.blobFromImage(
+        cv2.resize(frame, (300, 300)),
+        0.007843,
+        (300, 300),
+        127.5
+    )
+    net.setInput(blob)
+    detections = net.forward()
 
-    # BGR → RGB → PIL
-    rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
+    # Collect confident detections of interesting classes
+    found = {}  # label -> best confidence
+    for i in range(detections.shape[2]):
+        confidence = float(detections[0, 0, i, 2])
+        if confidence < _CONFIDENCE:
+            continue
+        idx   = int(detections[0, 0, i, 1])
+        label = _CLASSES[idx] if idx < len(_CLASSES) else "unknown"
+        if label not in _INTERESTING:
+            continue
+        if label not in found or confidence > found[label]:
+            found[label] = confidence
 
-    # ── Official moondream library ────────────────────────────
-    if processor is None:
-        try:
-            encoded = model.encode_image(pil_img)
-            result  = model.query(encoded, _PROMPT)
-            if isinstance(result, dict):
-                return result.get("answer", str(result)).strip()
-            return str(result).strip()
-        except Exception as e:
-            print(f"[caption] moondream lib query error: {e}")
-            raise
+    if not found:
+        return "motion detected — no objects identified"
 
-    # ── Transformers path ─────────────────────────────────────
-    try:
-        answer = model.answer_question(
-            model.encode_image(pil_img),
-            _PROMPT,
-            processor,
-        )
-        return str(answer).strip()
-    except Exception as e:
-        print(f"[caption] transformers query error: {e}")
-        raise
+    # Build description, highest confidence first
+    parts = sorted(found.items(), key=lambda x: -x[1])
+    if len(parts) == 1:
+        label, conf = parts[0]
+        return f"{label} detected ({int(conf * 100)}%)"
+    else:
+        labels = " + ".join(p[0] for p in parts)
+        top_conf = int(parts[0][1] * 100)
+        return f"{labels} detected ({top_conf}%)"
