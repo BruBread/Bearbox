@@ -282,6 +282,7 @@ def run_sender(state, log: CaptionLog, config: dict):
             if confirmed:
                 fired_auto = True
                 motion_history.clear()
+                time.sleep(2)
                 print(
                     f"[sender] Motion confirmed — "
                     f"{motion_hits}/{confirm_window} frames, "
