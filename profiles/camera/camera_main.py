@@ -49,7 +49,7 @@ def _load_camera_config():
         # laptop_ip is optional — used as a hint before LAN scan
         "laptop_ip":       cam.get("laptop_ip",       ""),
         "laptop_port":     cam.get("laptop_port",     5000),
-        "ai_timeout":      cam.get("ai_timeout",      30),
+        "ai_timeout":      cam.get("ai_timeout",      60),
         "ai_prompt":       cam.get("ai_prompt",       ""),
     }
 
