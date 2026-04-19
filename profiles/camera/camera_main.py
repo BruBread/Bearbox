@@ -55,7 +55,7 @@ def _load_camera_config():
 
 
 def run():
-    from profiles.camera.screen_camera_connected import run as play_intro
+    from profiles.camera.screen_camera_detected import run as play_intro
     play_intro()
     print("[camera] Intro done, loading config...")
 
