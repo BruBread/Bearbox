@@ -67,6 +67,16 @@ def run():
     det_thread.start()
     print("[camera] Detection thread started")
 
+    # Start overlay thread (live detection boxes on stream)
+    from profiles.camera.camera_caption import run_overlay
+    ovl_thread = threading.Thread(
+        target=run_overlay,
+        args=(state,),
+        daemon=True
+    )
+    ovl_thread.start()
+    print("[camera] Overlay thread started")
+
     # Start caption thread
     cap_thread = threading.Thread(
         target=run_captioning,

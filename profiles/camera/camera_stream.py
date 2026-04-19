@@ -36,7 +36,7 @@ _log   = None   # CaptionLog    — set by start_stream()
 
 def _generate():
     while True:
-        frame = _state.get_frame()
+        frame = _state.get_stream_frame()
         if frame is None:
             time.sleep(0.05)
             continue
@@ -69,6 +69,7 @@ def status():
         "caption_status": s["caption_status"],
         "latest_caption": s["latest_caption"],
         "auto_enabled":   _caption_mod.auto_enabled,
+        "overlay_enabled": _caption_mod.overlay_enabled,
     })
 
 
@@ -92,6 +93,20 @@ def capture_auto():
 
 
 # ── Caption log JSON ──────────────────────────────────────────
+
+@app.route("/overlay/toggle", methods=["POST"])
+def overlay_toggle():
+    data = request.get_json(silent=True) or {}
+    if "enabled" in data:
+        _caption_mod.overlay_enabled = bool(data["enabled"])
+    else:
+        _caption_mod.overlay_enabled = not _caption_mod.overlay_enabled
+    # Clear stale overlay frame when disabling so stream reverts instantly
+    if not _caption_mod.overlay_enabled and _state is not None:
+        _state.set_overlay_frame(None)
+    print(f"[stream] Overlay {'ON' if _caption_mod.overlay_enabled else 'OFF'}")
+    return jsonify({"ok": True, "overlay_enabled": _caption_mod.overlay_enabled})
+
 
 @app.route("/log")
 def log_json():
@@ -438,9 +453,19 @@ _PAGE_HTML = """<!DOCTYPE html>
   <span class="controls-label">AI Capture</span>
 
   <div class="toggle-wrap">
-    <span class="toggle-label __AUTO_LABEL_CLASS__" id="auto-label">__AUTO_LABEL_TEXT__</span>
+    <span class="toggle-label on" id="auto-label">AUTO ON</span>
     <label class="switch">
-      <input type="checkbox" id="auto-toggle" __AUTO_CHECKED__ onchange="toggleAuto(this.checked)">
+      <input type="checkbox" id="auto-toggle" checked onchange="toggleAuto(this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="controls-divider"></div>
+
+  <div class="toggle-wrap">
+    <span class="toggle-label off" id="overlay-label">OVERLAY OFF</span>
+    <label class="switch">
+      <input type="checkbox" id="overlay-toggle" __OVERLAY_CHECKED__ onchange="toggleOverlay(this.checked)">
       <span class="slider"></span>
     </label>
   </div>
@@ -502,6 +527,23 @@ _PAGE_HTML = """<!DOCTYPE html>
     .then(r => r.json())
     .then(d => showToast(d.auto_enabled ? 'Auto capture ON' : 'Auto capture OFF',
                          d.auto_enabled ? 'ok' : 'warn'))
+    .catch(() => showToast('Toggle failed', 'err'));
+  }
+
+  // ── Overlay toggle ────────────────────────────────────────
+  function toggleOverlay(checked) {
+    const label = document.getElementById('overlay-label');
+    label.textContent = checked ? 'OVERLAY ON' : 'OVERLAY OFF';
+    label.className   = 'toggle-label ' + (checked ? 'on' : 'off');
+
+    fetch('/overlay/toggle', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({enabled: checked})
+    })
+    .then(r => r.json())
+    .then(d => showToast(d.overlay_enabled ? 'Overlay ON' : 'Overlay OFF',
+                         d.overlay_enabled ? 'ok' : 'warn'))
     .catch(() => showToast('Toggle failed', 'err'));
   }
 
@@ -567,13 +609,22 @@ _PAGE_HTML = """<!DOCTYPE html>
           else          vs.classList.remove('motion-active');
         }
 
-        // sync toggle if server state diverged
+        // sync auto toggle if server state diverged
         const toggle = document.getElementById('auto-toggle');
         if (toggle && toggle.checked !== s.auto_enabled) {
           toggle.checked = s.auto_enabled;
           const label    = document.getElementById('auto-label');
           label.textContent = s.auto_enabled ? 'AUTO ON' : 'AUTO OFF';
           label.className   = 'toggle-label ' + (s.auto_enabled ? 'on' : 'off');
+        }
+
+        // sync overlay toggle
+        const ovToggle = document.getElementById('overlay-toggle');
+        if (ovToggle && s.overlay_enabled !== undefined && ovToggle.checked !== s.overlay_enabled) {
+          ovToggle.checked = s.overlay_enabled;
+          const ovLabel    = document.getElementById('overlay-label');
+          ovLabel.textContent = s.overlay_enabled ? 'OVERLAY ON' : 'OVERLAY OFF';
+          ovLabel.className   = 'toggle-label ' + (s.overlay_enabled ? 'on' : 'off');
         }
       })
       .catch(() => {});
@@ -676,10 +727,7 @@ def _render_page_html():
     html = html.replace("__LOG_ROWS__",       rows_html)
     html = html.replace("__LOAD_TIME__",      datetime.datetime.now().strftime("%H:%M:%S"))
     html = html.replace("__LATEST_CAPTION__", latest_cap)
-    html = html.replace("__AUTO_ENABLED_JS__",  "true" if _caption_mod.auto_enabled else "false")
-    html = html.replace("__AUTO_LABEL_CLASS__", "on" if _caption_mod.auto_enabled else "off")
-    html = html.replace("__AUTO_LABEL_TEXT__",  "AUTO ON" if _caption_mod.auto_enabled else "AUTO OFF")
-    html = html.replace("__AUTO_CHECKED__",     "checked" if _caption_mod.auto_enabled else "")
+    html = html.replace("__AUTO_ENABLED_JS__","true" if _caption_mod.auto_enabled else "false")
     return html
 
 

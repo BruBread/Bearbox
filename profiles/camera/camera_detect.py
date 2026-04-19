@@ -24,7 +24,8 @@ class DetectionState:
 
     def __init__(self):
         self._lock          = threading.Lock()
-        self.latest_frame   = None   # annotated frame (numpy array, BGR)
+        self.latest_frame   = None   # raw annotated frame (numpy array, BGR)
+        self.overlay_frame  = None   # frame with object detection boxes drawn
         self.motion         = False  # True if motion detected this frame
         self.motion_count   = 0      # total motion events since start
         self.fps            = 0.0
@@ -48,8 +49,23 @@ class DetectionState:
             self.motion = motion
 
     def get_frame(self):
+        """Return the raw motion-annotated frame (used by caption thread)."""
         with self._lock:
             return self.latest_frame.copy() if self.latest_frame is not None else None
+
+    def set_overlay_frame(self, frame):
+        """Called by overlay thread to store the detection-annotated frame."""
+        with self._lock:
+            self.overlay_frame = frame
+
+    def get_stream_frame(self):
+        """
+        Returns overlay_frame if overlay is active, else latest_frame.
+        Used by Flask MJPEG feed so boxes appear on stream automatically.
+        """
+        with self._lock:
+            f = self.overlay_frame if self.overlay_frame is not None else self.latest_frame
+            return f.copy() if f is not None else None
 
     def get_status(self):
         with self._lock:
