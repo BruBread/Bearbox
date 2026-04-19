@@ -5,35 +5,39 @@ BearBox Camera — Object Detection Captioning
 Two modes running in parallel:
 
 1. OVERLAY (run_overlay thread) — runs MobileNet SSD as fast as inference
-   allows (no fixed sleep — Pi 4 naturally rate-limits at ~3-5 FPS on CPU).
-   Writes a box list to state via set_overlay_boxes(); get_stream_frame()
-   redraws those boxes onto every fresh camera frame at full camera FPS.
-   No more lag from waiting on inference before serving a stream frame.
+   allows, writes box list to state via set_overlay_boxes(). Stream redraws
+   boxes at full camera FPS from cache — no inference-gated lag.
 
-2. LOG (run_captioning thread) — triggers on confirmed motion or manual
-   request, appends a text description to CaptionLog with 15s cooldown.
+2. LOG (run_captioning thread) — new detect-first flow:
 
-Motion confirmation (auto mode):
-   Requires motion to be present in at least CONFIRM_HITS out of the last
-   CONFIRM_WINDOW frames AND total motion_area >= MIN_MOTION_AREA before
-   firing a caption. Filters single-frame flickers, lighting changes, and
-   noise that just barely clears the contour threshold.
+   OLD flow: motion confirmed → grab frame → log
+   NEW flow:
+     a) Motion confirmation window passes
+     b) Quick detection pass — if nothing interesting, silently drop + reset
+     c) Something detected → start 1.5s presence watch
+     d) Run detection every 0.5s during watch window
+     e) Object must appear in >= 2 of 3 check passes (consistency gate)
+     f) Still present at end of window → log it
+     g) Disappeared before window ends → drop, no log
+     h) Cooldown starts AFTER watch window completes (not on first motion)
+
+   This means:
+     - Frame noise / lighting changes → dropped at step (b)
+     - Something walks past quickly → dropped at step (g)
+     - Something lingers at your door → logged at step (f)
 
 Controls (set from camera_stream.py via this module's globals):
   auto_enabled    — bool, enables auto motion-triggered log entries
   manual_trigger  — bool, set True to fire one manual log entry
   overlay_enabled — bool, enables live object detection boxes on stream
 
-Config keys (passed in from camera_main.py via config dict):
-  confirm_window   : int   — rolling window size        (default 5)
-  confirm_hits     : int   — required motion frames     (default 3)
-  min_motion_area  : int   — minimum total contour px²  (default 2000)
-
-Usage (from camera_main.py):
-    from camera_caption import CaptionLog, run_captioning, run_overlay
-    log = CaptionLog()
-    threading.Thread(target=run_overlay,    args=(state, config), daemon=True).start()
-    threading.Thread(target=run_captioning, args=(state, log, config), daemon=True).start()
+Config keys (from config.json camera block):
+  confirm_window      : int   — motion rolling window size       (default 5)
+  confirm_hits        : int   — required motion frames           (default 3)
+  min_motion_area     : int   — minimum contour area px²         (default 2000)
+  presence_duration   : float — seconds object must persist      (default 1.5)
+  presence_interval   : float — seconds between presence checks  (default 0.5)
+  presence_min_hits   : int   — checks that must confirm object  (default 2)
 """
 
 import cv2
@@ -44,16 +48,15 @@ import os
 from collections import deque
 
 # ── Public control flags ──────────────────────────────────────
-auto_enabled    = False  # auto motion-triggered log entries (off by default)
-manual_trigger  = False  # set True to fire one manual log entry
-overlay_enabled = False  # live detection boxes on stream (off by default)
+auto_enabled    = False
+manual_trigger  = False
+overlay_enabled = False
 
 # ── Model paths ───────────────────────────────────────────────
 _MODEL_DIR  = os.path.join(os.path.dirname(__file__), "models")
 _PROTOTXT   = os.path.join(_MODEL_DIR, "mobilenet_ssd.prototxt")
 _CAFFEMODEL = os.path.join(_MODEL_DIR, "mobilenet_ssd.caffemodel")
 
-# MobileNet SSD PASCAL VOC labels
 _CLASSES = [
     "background", "aeroplane", "bicycle", "bird", "boat",
     "bottle", "bus", "car", "cat", "chair", "cow",
@@ -69,13 +72,11 @@ _INTERESTING = {
 _CONFIDENCE      = 0.45
 CAPTION_COOLDOWN = 15.0
 
-# Shared net — loaded once, used by both overlay and captioning threads
 _net_lock = threading.Lock()
 _net      = None
 
 
 def _load_net():
-    """Load MobileNet SSD, thread-safe. Returns net or raises."""
     global _net
     with _net_lock:
         if _net is None:
@@ -127,24 +128,18 @@ class CaptionLog:
 def run_overlay(state, config=None):
     """
     Runs MobileNet SSD as fast as inference allows and stores the resulting
-    box list in state via set_overlay_boxes(). get_stream_frame() redraws
-    those boxes onto every fresh camera frame, so the MJPEG feed always
-    runs at full camera FPS regardless of inference speed.
-
-    When overlay is disabled the thread idles cheaply and clears the box
-    cache so no stale boxes appear if overlay is re-enabled later.
+    box list in state via set_overlay_boxes(). Stream redraws those boxes
+    at full camera FPS — never blocks on inference.
     """
     print("[overlay] Overlay thread started")
     net = None
 
     while state.running:
         if not overlay_enabled:
-            # Clear stale boxes so they don't reappear on re-enable
             state.set_overlay_boxes([], False)
             time.sleep(0.1)
             continue
 
-        # Lazy load
         if net is None:
             try:
                 print("[overlay] Loading MobileNet SSD for overlay...")
@@ -161,16 +156,210 @@ def run_overlay(state, config=None):
 
         try:
             boxes = _detect_boxes(net, frame)
-            # Push box list — stream thread redraws at full FPS from cache
             state.set_overlay_boxes(boxes, overlay_enabled)
         except Exception as e:
             print(f"[overlay] Error: {e}")
 
-        # No sleep here — inference time is the natural rate limiter.
-        # On Pi 4 CPU this lands at ~3-5 FPS which is fine for overlay.
+        # No sleep — inference time is the natural rate limiter (~3-5 FPS on Pi 4)
 
     print("[overlay] Overlay thread stopped")
 
+
+# ── Captioning Thread ─────────────────────────────────────────
+
+def run_captioning(state, log: CaptionLog, config=None):
+    """
+    Detect-first caption flow with 1.5s presence window.
+    See module docstring for full flow description.
+    """
+    global manual_trigger
+
+    cfg               = config or {}
+    confirm_window    = cfg.get("confirm_window",    5)
+    confirm_hits      = cfg.get("confirm_hits",      3)
+    min_motion_area   = cfg.get("min_motion_area",   2000)
+    presence_duration = cfg.get("presence_duration", 1.5)
+    presence_interval = cfg.get("presence_interval", 0.5)
+    presence_min_hits = cfg.get("presence_min_hits", 2)
+
+    net            = None
+    last_run_ts    = 0.0
+    busy           = False
+    motion_history = deque(maxlen=confirm_window)
+
+    print(
+        f"[caption] Caption thread started — "
+        f"confirm {confirm_hits}/{confirm_window} frames, "
+        f"min area {min_motion_area}px², "
+        f"presence {presence_duration}s"
+    )
+
+    while state.running:
+        time.sleep(0.25)
+
+        status      = state.get_status()
+        now         = time.time()
+        on_cooldown = (now - last_run_ts) < CAPTION_COOLDOWN
+
+        motion_history.append(status["motion"])
+        motion_hits = sum(motion_history)
+
+        # ── Manual trigger — bypasses confirmation + presence window ──
+        fired_manual = False
+        if manual_trigger:
+            manual_trigger = False
+            if busy:
+                print("[caption] Manual trigger ignored — inference running")
+            elif on_cooldown:
+                remaining = int(CAPTION_COOLDOWN - (now - last_run_ts))
+                print(f"[caption] Manual trigger ignored — cooldown ({remaining}s left)")
+                state.caption_status = "COOLDOWN"
+            else:
+                fired_manual = True
+                print("[caption] Manual capture triggered")
+
+        # ── Auto trigger — motion confirmation gate ───────────────────
+        fired_auto = False
+        if (not fired_manual
+                and auto_enabled
+                and not busy
+                and not on_cooldown):
+
+            confirmed = (
+                len(motion_history) == confirm_window
+                and motion_hits >= confirm_hits
+                and status["motion_area"] >= min_motion_area
+            )
+
+            if confirmed:
+                fired_auto = True
+                motion_history.clear()
+                print(
+                    f"[caption] Motion confirmed — "
+                    f"{motion_hits}/{confirm_window} frames, "
+                    f"area={status['motion_area']}px² — running detection"
+                )
+
+        if not fired_manual and not fired_auto:
+            if not busy and not on_cooldown:
+                state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
+            continue
+
+        # ── Kick off detect-first + presence watch in worker thread ──
+        busy  = True
+        frame = state.get_frame()
+
+        def _watch(frame_copy, trigger_source):
+            """
+            Full detect-first presence flow.
+            Manual trigger skips presence window and logs immediately.
+            Auto trigger requires object to persist for presence_duration.
+            """
+            nonlocal net, busy, last_run_ts
+
+            try:
+                # Load model if needed
+                if net is None:
+                    state.caption_status = "LOADING MODEL..."
+                    net = _load_net()
+
+                # ── Step 1: initial detection pass ───────────────────
+                state.caption_status = "SCANNING..."
+                initial_found = _interesting_labels(net, frame_copy)
+
+                if not initial_found:
+                    # Nothing interesting — drop silently, don't log
+                    print("[caption] Detection pass — nothing interesting, dropping")
+                    state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
+                    busy = False
+                    return
+
+                print(f"[caption] Detected {initial_found} — watching for {presence_duration}s")
+
+                # ── Manual: log immediately, no presence window ───────
+                if trigger_source == "MANUAL":
+                    caption = _labels_to_caption(net, frame_copy)
+                    caption = f"[manual] {caption}"
+                    last_run_ts = time.time()
+                    state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
+                    state.latest_caption = caption
+                    log.append(caption, frame_copy)
+                    busy = False
+                    return
+
+                # ── Auto: presence window ─────────────────────────────
+                # Run detection every presence_interval seconds for
+                # presence_duration total. Count how many passes confirm
+                # at least one of the initially detected labels.
+                state.caption_status = "WATCHING..."
+
+                watch_start   = time.time()
+                check_passes  = 0   # total checks run
+                confirm_count = 0   # checks that confirmed an interesting object
+                last_frame    = frame_copy  # keep most recent frame for thumbnail
+
+                while (time.time() - watch_start) < presence_duration:
+                    time.sleep(presence_interval)
+                    check_passes += 1
+
+                    current_frame = state.get_frame()
+                    if current_frame is None:
+                        continue
+
+                    last_frame    = current_frame
+                    current_found = _interesting_labels(net, current_frame)
+
+                    # Accept if ANY interesting object still present
+                    # (not just the originally detected one — it may have
+                    #  moved or a second object joined the scene)
+                    if current_found:
+                        confirm_count += 1
+                        print(
+                            f"[caption] Presence check {check_passes}: "
+                            f"{current_found} — {confirm_count} confirms"
+                        )
+                    else:
+                        print(
+                            f"[caption] Presence check {check_passes}: "
+                            f"nothing — {confirm_count} confirms so far"
+                        )
+
+                # ── Consistency gate ──────────────────────────────────
+                if confirm_count < presence_min_hits:
+                    print(
+                        f"[caption] Presence failed — "
+                        f"{confirm_count}/{presence_min_hits} confirms needed, dropping"
+                    )
+                    state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
+                    busy = False
+                    return
+
+                # ── Passed — log it ───────────────────────────────────
+                caption = _labels_to_caption(net, last_frame)
+                last_run_ts = time.time()   # cooldown starts NOW, after watch
+                state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
+                state.latest_caption = caption
+                log.append(caption, last_frame)
+                print(
+                    f"[caption] Logged after presence window "
+                    f"({confirm_count}/{check_passes} confirms)"
+                )
+
+            except Exception as ex:
+                print(f"[caption] Error: {ex}")
+                state.caption_status = "ERROR"
+                log.append(f"[error: {ex}]", frame_copy)
+            finally:
+                busy = False
+
+        source = "MANUAL" if fired_manual else "AUTO"
+        state.caption_status = f"SCANNING..."
+        threading.Thread(target=_watch, args=(frame, source), daemon=True).start()
+
+    print("[caption] Caption thread stopped")
+
+
+# ── Detection helpers ─────────────────────────────────────────
 
 def _detect_boxes(net, frame):
     """
@@ -193,7 +382,6 @@ def _detect_boxes(net, frame):
         label = _CLASSES[idx] if idx < len(_CLASSES) else "unknown"
         if label not in _INTERESTING:
             continue
-
         box = detections[0, 0, i, 3:7] * [w, h, w, h]
         x1, y1, x2, y2 = box.astype(int)
         boxes.append((x1, y1, x2, y2, label, confidence))
@@ -201,137 +389,23 @@ def _detect_boxes(net, frame):
     return boxes
 
 
-# ── Captioning Thread ─────────────────────────────────────────
-
-def run_captioning(state, log: CaptionLog, config=None):
+def _interesting_labels(net, frame):
     """
-    Watches for confirmed motion or manual trigger and appends
-    detection descriptions to the CaptionLog.
-
-    Motion confirmation:
-      Keeps a rolling deque of the last CONFIRM_WINDOW motion booleans.
-      Only fires when >= CONFIRM_HITS of those frames show motion AND
-      the current motion_area >= MIN_MOTION_AREA. This prevents single-
-      frame noise, flicker, and tiny pixel-level changes from triggering.
+    Returns a set of interesting label strings found in frame,
+    empty set if nothing detected above confidence threshold.
     """
-    global manual_trigger
-
-    cfg              = config or {}
-    confirm_window   = cfg.get("confirm_window",  5)
-    confirm_hits     = cfg.get("confirm_hits",    3)
-    min_motion_area  = cfg.get("min_motion_area", 2000)
-
-    net              = None
-    last_run_ts      = 0.0
-    busy             = False
-
-    # Rolling motion history for confirmation window
-    motion_history   = deque(maxlen=confirm_window)
-
-    print(
-        f"[caption] Caption thread started "
-        f"(confirm {confirm_hits}/{confirm_window} frames, "
-        f"min area {min_motion_area}px²)"
-    )
-
-    while state.running:
-        time.sleep(0.25)
-
-        status      = state.get_status()
-        now         = time.time()
-        on_cooldown = (now - last_run_ts) < CAPTION_COOLDOWN
-
-        # Update rolling motion history
-        motion_history.append(status["motion"])
-        motion_hits = sum(motion_history)
-
-        # ── Manual trigger ────────────────────────────────────
-        fired_manual = False
-        if manual_trigger:
-            manual_trigger = False
-            if busy:
-                print("[caption] Manual trigger ignored — inference running")
-            elif on_cooldown:
-                remaining = int(CAPTION_COOLDOWN - (now - last_run_ts))
-                print(f"[caption] Manual trigger ignored — cooldown ({remaining}s left)")
-                state.caption_status = "COOLDOWN"
-            else:
-                fired_manual = True
-                print("[caption] Manual capture triggered")
-
-        # ── Auto trigger — confirmation window + area gate ────
-        fired_auto = False
-        if (not fired_manual
-                and auto_enabled
-                and not busy
-                and not on_cooldown):
-
-            confirmed = (
-                len(motion_history) == confirm_window          # window full
-                and motion_hits >= confirm_hits                 # enough motion frames
-                and status["motion_area"] >= min_motion_area   # area large enough
-            )
-
-            if confirmed:
-                fired_auto = True
-                print(
-                    f"[caption] Auto trigger — "
-                    f"{motion_hits}/{confirm_window} frames, "
-                    f"area={status['motion_area']}px²"
-                )
-                # Clear history so we don't immediately re-trigger
-                motion_history.clear()
-
-        # ── Update status display ─────────────────────────────
-        if not fired_manual and not fired_auto:
-            if not busy and not on_cooldown:
-                state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
-            continue
-
-        # ── Fire inference ────────────────────────────────────
-        last_run_ts = now
-        busy        = True
-        frame       = state.get_frame()
-        source      = "MANUAL" if fired_manual else "AUTO"
-        state.caption_status = f"CAPTURED ({source})"
-
-        def _infer(frame_copy, trigger_source):
-            nonlocal net, busy
-            try:
-                if net is None:
-                    state.caption_status = "LOADING MODEL..."
-                    net = _load_net()
-
-                state.caption_status = "PROCESSING..."
-                caption = _run_detection(net, frame_copy)
-
-                if trigger_source == "MANUAL":
-                    caption = f"[manual] {caption}"
-
-                state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
-                state.latest_caption = caption
-                log.append(caption, frame_copy)
-
-            except Exception as ex:
-                print(f"[caption] Detection error: {ex}")
-                state.caption_status = "ERROR"
-                log.append(f"[error: {ex}]", frame_copy)
-            finally:
-                busy = False
-
-        threading.Thread(target=_infer, args=(frame, source), daemon=True).start()
-
-    print("[caption] Caption thread stopped")
+    boxes = _detect_boxes(net, frame)
+    return {label for (_, _, _, _, label, _) in boxes}
 
 
-def _run_detection(net, frame):
-    """Run MobileNet SSD, return human-readable string."""
+def _labels_to_caption(net, frame):
+    """Run detection and return a human-readable caption string."""
     boxes = _detect_boxes(net, frame)
 
     if not boxes:
         return "motion detected — no objects identified"
 
-    # Collapse duplicates, keep highest confidence per label
+    # Collapse to highest confidence per label
     found = {}
     for (_, _, _, _, label, conf) in boxes:
         if label not in found or conf > found[label]:
