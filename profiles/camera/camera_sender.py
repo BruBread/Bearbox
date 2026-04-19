@@ -198,9 +198,7 @@ def run_sender(state, log: CaptionLog, config: dict):
     timeout         = config.get("ai_timeout",     90)   # bumped for llava-phi3
     prompt          = config.get(
         "ai_prompt",
-        "Describe only the people or animals you see and what they are doing. "
-        "Be brief — one or two sentences maximum. "
-        "Do not describe the room, background, furniture, or walls."
+        "What is happening in this image? One sentence only."
     )
     confirm_window  = config.get("confirm_window",  5)
     confirm_hits    = config.get("confirm_hits",    3)
