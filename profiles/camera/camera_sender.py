@@ -3,7 +3,7 @@
 BearBox Camera — AI Sender
 
 Watches for motion, captures a JPEG snapshot, and POSTs it to the
-laptop's BearBox server for Moondream/Ollama description.
+laptop's BearBox server for llava-phi3/Ollama description.
 Logs the natural language result back to CaptionLog.
 
 Auto-discovery:
@@ -15,10 +15,11 @@ Auto-discovery:
 Flow:
   1. Discover laptop server on LAN
   2. Wait for motion confirmation window to pass
-  3. Grab snapshot → encode JPEG → POST to laptop /describe
-  4. Laptop returns natural language description → log it
-  5. If laptop unreachable → drop frame, log error, rescan for server
-  6. Cooldown starts after send completes
+  3. Grab raw snapshot (no annotations) → resize to 320x240 → encode JPEG
+  4. POST to laptop /describe
+  5. Laptop returns natural language description → log it
+  6. If laptop unreachable → drop frame, log error, rescan for server
+  7. Cooldown starts after send completes
 
 Controls (toggled via camera_stream.py endpoints):
   auto_enabled   — bool, enables motion-triggered sends
@@ -42,6 +43,9 @@ manual_trigger = False
 SEND_COOLDOWN    = 15.0   # seconds between auto sends
 BEACON_TIMEOUT   = 0.3    # seconds per host during LAN scan
 RESCAN_INTERVAL  = 30.0   # seconds between rescans when server not found
+SEND_WIDTH       = 320    # resize frame to this width before sending
+SEND_HEIGHT      = 240    # resize frame to this height before sending
+SEND_QUALITY     = 60     # JPEG quality for sent frames (lower = faster)
 
 
 # ── Caption Log ────────────────────────────────────────────────
@@ -56,7 +60,7 @@ class CaptionLog:
     def append(self, description: str, frame=None, tag=None):
         """
         Add a new log entry.
-        description : natural language text from Moondream (or error string)
+        description : natural language text from llava-phi3 (or error string)
         frame       : numpy BGR frame to encode as thumbnail (optional)
         tag         : "manual" | "auto" | "error"
         """
@@ -123,7 +127,6 @@ def _scan_for_server(port: int, hint_ip: str = "") -> str | None:
     Tries hint_ip first if provided (e.g. laptop_ip from config).
     Returns 'http://x.x.x.x:port' or None.
     """
-    # Try the hint first — saves a full scan if it's correct
     if hint_ip:
         print(f"[sender] Trying hint IP {hint_ip}...")
         if _check_beacon(hint_ip, port, timeout=1.0):
@@ -150,10 +153,12 @@ def _scan_for_server(port: int, hint_ip: str = "") -> str | None:
 
 def _send_frame(frame, laptop_url: str, timeout: int, prompt: str) -> str:
     """
-    Encode frame as JPEG and POST to laptop /describe.
+    Resize frame, encode as JPEG, and POST to laptop /describe.
+    Sends a small 320x240 frame at quality 60 — fast upload, enough detail.
     Returns description string on success, raises on failure.
     """
-    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    small   = cv2.resize(frame, (SEND_WIDTH, SEND_HEIGHT))
+    ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, SEND_QUALITY])
     if not ok:
         raise RuntimeError("Failed to encode frame as JPEG")
 
@@ -178,7 +183,7 @@ def run_sender(state, log: CaptionLog, config: dict):
     config keys (all under 'camera' block in config.json):
         laptop_ip         : str   — optional hint IP to try first
         laptop_port       : int   — server port              (default 5000)
-        ai_timeout        : int   — HTTP timeout seconds     (default 30)
+        ai_timeout        : int   — HTTP timeout seconds     (default 90)
         ai_prompt         : str   — prompt sent with image   (optional)
         confirm_window    : int   — rolling window size       (default 5)
         confirm_hits      : int   — required motion frames    (default 3)
@@ -188,10 +193,12 @@ def run_sender(state, log: CaptionLog, config: dict):
 
     hint_ip         = config.get("laptop_ip",      "")
     port            = config.get("laptop_port",    5000)
-    timeout         = config.get("ai_timeout",     30)
+    timeout         = config.get("ai_timeout",     90)   # bumped for llava-phi3
     prompt          = config.get(
         "ai_prompt",
-        "Describe what you see. Focus on any animals, people, or unusual activity."
+        "Describe only the people or animals you see and what they are doing. "
+        "Be brief — one or two sentences maximum. "
+        "Do not describe the room, background, furniture, or walls."
     )
     confirm_window  = config.get("confirm_window",  5)
     confirm_hits    = config.get("confirm_hits",    3)
@@ -200,7 +207,8 @@ def run_sender(state, log: CaptionLog, config: dict):
     print(
         f"[sender] Started — port {port}, "
         f"confirm {confirm_hits}/{confirm_window} frames, "
-        f"min area {min_motion_area}px²"
+        f"min area {min_motion_area}px², "
+        f"send size {SEND_WIDTH}x{SEND_HEIGHT} q{SEND_QUALITY}"
     )
 
     # ── Discover server ────────────────────────────────────────
@@ -285,28 +293,31 @@ def run_sender(state, log: CaptionLog, config: dict):
 
         # ── Fire send in worker thread ─────────────────────────
         busy  = True
-        frame = state.get_raw_frame()
+        frame = state.get_raw_frame()   # clean frame — no red boxes or HUD
         tag   = "manual" if fired_manual else "auto"
-        url   = laptop_url  # snapshot the URL in case it changes
+        url   = laptop_url
 
         def _do_send(frame_copy, send_tag, send_url):
             nonlocal busy, last_send_ts, laptop_url
 
             try:
                 state.ai_status = "SENDING..."
-                print(f"[sender] POSTing to {send_url}/describe ...")
+                print(
+                    f"[sender] POSTing {SEND_WIDTH}x{SEND_HEIGHT} "
+                    f"frame to {send_url}/describe ..."
+                )
 
                 description = _send_frame(frame_copy, send_url, timeout, prompt)
 
-                last_send_ts            = time.time()
+                last_send_ts             = time.time()
                 state.latest_description = description
-                state.ai_status         = "IDLE" if auto_enabled else "AUTO OFF"
+                state.ai_status          = "IDLE" if auto_enabled else "AUTO OFF"
                 log.append(description, frame_copy, tag=send_tag)
 
             except requests.exceptions.ConnectionError:
                 print(f"[sender] Could not reach {send_url} — will rescan")
                 state.ai_status = "NO CONNECTION"
-                laptop_url      = None   # triggers rescan on next loop
+                laptop_url      = None
                 last_scan_ts    = 0.0
                 log.append("[laptop unreachable — frame dropped]", frame_copy, tag="error")
 
