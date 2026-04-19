@@ -4,24 +4,36 @@ BearBox Camera — Object Detection Captioning
 
 Two modes running in parallel:
 
-1. OVERLAY (run_overlay thread) — runs MobileNet SSD on every frame,
-   draws labeled bounding boxes directly onto the stream. Controlled
-   by overlay_enabled flag. Runs at ~5 FPS to keep CPU reasonable.
+1. OVERLAY (run_overlay thread) — runs MobileNet SSD as fast as inference
+   allows (no fixed sleep — Pi 4 naturally rate-limits at ~3-5 FPS on CPU).
+   Writes a box list to state via set_overlay_boxes(); get_stream_frame()
+   redraws those boxes onto every fresh camera frame at full camera FPS.
+   No more lag from waiting on inference before serving a stream frame.
 
-2. LOG (run_captioning thread) — on motion trigger (or manual), grabs
-   a frame, runs detection, and appends a text description to CaptionLog.
-   Controlled by auto_enabled flag with 15s cooldown.
+2. LOG (run_captioning thread) — triggers on confirmed motion or manual
+   request, appends a text description to CaptionLog with 15s cooldown.
+
+Motion confirmation (auto mode):
+   Requires motion to be present in at least CONFIRM_HITS out of the last
+   CONFIRM_WINDOW frames AND total motion_area >= MIN_MOTION_AREA before
+   firing a caption. Filters single-frame flickers, lighting changes, and
+   noise that just barely clears the contour threshold.
 
 Controls (set from camera_stream.py via this module's globals):
   auto_enabled    — bool, enables auto motion-triggered log entries
   manual_trigger  — bool, set True to fire one manual log entry
   overlay_enabled — bool, enables live object detection boxes on stream
 
+Config keys (passed in from camera_main.py via config dict):
+  confirm_window   : int   — rolling window size        (default 5)
+  confirm_hits     : int   — required motion frames     (default 3)
+  min_motion_area  : int   — minimum total contour px²  (default 2000)
+
 Usage (from camera_main.py):
     from camera_caption import CaptionLog, run_captioning, run_overlay
     log = CaptionLog()
-    threading.Thread(target=run_overlay,    args=(state,),     daemon=True).start()
-    threading.Thread(target=run_captioning, args=(state, log), daemon=True).start()
+    threading.Thread(target=run_overlay,    args=(state, config), daemon=True).start()
+    threading.Thread(target=run_captioning, args=(state, log, config), daemon=True).start()
 """
 
 import cv2
@@ -53,24 +65,6 @@ _INTERESTING = {
     "person", "cat", "dog", "bird", "cow", "sheep", "horse",
     "car", "bus", "motorbike", "bicycle", "boat", "train",
 }
-
-# Colours per class for overlay boxes (BGR)
-_COLORS = {
-    "person":    (0,   200, 255),   # amber-ish
-    "cat":       (0,   255, 180),
-    "dog":       (0,   255, 180),
-    "bird":      (180, 255,   0),
-    "car":       (255, 100,   0),
-    "bus":       (255,  80,   0),
-    "motorbike": (255, 140,   0),
-    "bicycle":   (255, 180,   0),
-    "boat":      (200, 200,   0),
-    "train":     (255,  60,   0),
-    "cow":       (100, 255, 100),
-    "sheep":     (100, 255, 100),
-    "horse":     (100, 255, 100),
-}
-_DEFAULT_COLOR = (180, 180, 180)
 
 _CONFIDENCE      = 0.45
 CAPTION_COOLDOWN = 15.0
@@ -130,16 +124,23 @@ class CaptionLog:
 
 # ── Overlay Thread ────────────────────────────────────────────
 
-def run_overlay(state):
+def run_overlay(state, config=None):
     """
-    Runs MobileNet SSD on every frame and draws labeled boxes onto the
-    stream. Polls at ~5 FPS when enabled, idles cheaply when disabled.
+    Runs MobileNet SSD as fast as inference allows and stores the resulting
+    box list in state via set_overlay_boxes(). get_stream_frame() redraws
+    those boxes onto every fresh camera frame, so the MJPEG feed always
+    runs at full camera FPS regardless of inference speed.
+
+    When overlay is disabled the thread idles cheaply and clears the box
+    cache so no stale boxes appear if overlay is re-enabled later.
     """
     print("[overlay] Overlay thread started")
     net = None
 
     while state.running:
         if not overlay_enabled:
+            # Clear stale boxes so they don't reappear on re-enable
+            state.set_overlay_boxes([], False)
             time.sleep(0.1)
             continue
 
@@ -159,27 +160,31 @@ def run_overlay(state):
             continue
 
         try:
-            annotated = _annotate_frame(net, frame)
-            state.set_overlay_frame(annotated)
+            boxes = _detect_boxes(net, frame)
+            # Push box list — stream thread redraws at full FPS from cache
+            state.set_overlay_boxes(boxes, overlay_enabled)
         except Exception as e:
             print(f"[overlay] Error: {e}")
 
-        time.sleep(0.2)   # ~5 FPS — light on CPU
+        # No sleep here — inference time is the natural rate limiter.
+        # On Pi 4 CPU this lands at ~3-5 FPS which is fine for overlay.
 
     print("[overlay] Overlay thread stopped")
 
 
-def _annotate_frame(net, frame):
-    """Run detection and draw boxes. Returns annotated frame copy."""
+def _detect_boxes(net, frame):
+    """
+    Run MobileNet SSD, return list of box tuples.
+    Each tuple: (x1, y1, x2, y2, label, confidence)
+    """
     h, w = frame.shape[:2]
-    out  = frame.copy()
-
     blob = cv2.dnn.blobFromImage(
         cv2.resize(frame, (300, 300)), 0.007843, (300, 300), 127.5
     )
     net.setInput(blob)
     detections = net.forward()
 
+    boxes = []
     for i in range(detections.shape[2]):
         confidence = float(detections[0, 0, i, 2])
         if confidence < _CONFIDENCE:
@@ -189,45 +194,58 @@ def _annotate_frame(net, frame):
         if label not in _INTERESTING:
             continue
 
-        # Bounding box
-        box    = detections[0, 0, i, 3:7] * [w, h, w, h]
+        box = detections[0, 0, i, 3:7] * [w, h, w, h]
         x1, y1, x2, y2 = box.astype(int)
-        color  = _COLORS.get(label, _DEFAULT_COLOR)
+        boxes.append((x1, y1, x2, y2, label, confidence))
 
-        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-
-        # Label pill
-        tag     = f"{label} {int(confidence * 100)}%"
-        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-        pill_y1 = max(y1 - th - 6, 0)
-        pill_y2 = max(y1, th + 6)
-        cv2.rectangle(out, (x1, pill_y1), (x1 + tw + 6, pill_y2), color, -1)
-        cv2.putText(out, tag, (x1 + 3, pill_y2 - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
-
-    return out
+    return boxes
 
 
 # ── Captioning Thread ─────────────────────────────────────────
 
-def run_captioning(state, log: CaptionLog):
+def run_captioning(state, log: CaptionLog, config=None):
+    """
+    Watches for confirmed motion or manual trigger and appends
+    detection descriptions to the CaptionLog.
+
+    Motion confirmation:
+      Keeps a rolling deque of the last CONFIRM_WINDOW motion booleans.
+      Only fires when >= CONFIRM_HITS of those frames show motion AND
+      the current motion_area >= MIN_MOTION_AREA. This prevents single-
+      frame noise, flicker, and tiny pixel-level changes from triggering.
+    """
     global manual_trigger
 
-    net         = None
-    last_count  = 0
-    last_run_ts = 0.0
-    busy        = False
+    cfg              = config or {}
+    confirm_window   = cfg.get("confirm_window",  5)
+    confirm_hits     = cfg.get("confirm_hits",    3)
+    min_motion_area  = cfg.get("min_motion_area", 2000)
 
-    print("[caption] Caption thread started — waiting for trigger...")
+    net              = None
+    last_run_ts      = 0.0
+    busy             = False
+
+    # Rolling motion history for confirmation window
+    motion_history   = deque(maxlen=confirm_window)
+
+    print(
+        f"[caption] Caption thread started "
+        f"(confirm {confirm_hits}/{confirm_window} frames, "
+        f"min area {min_motion_area}px²)"
+    )
 
     while state.running:
         time.sleep(0.25)
 
         status      = state.get_status()
-        cur_count   = status["motion_count"]
         now         = time.time()
         on_cooldown = (now - last_run_ts) < CAPTION_COOLDOWN
 
+        # Update rolling motion history
+        motion_history.append(status["motion"])
+        motion_hits = sum(motion_history)
+
+        # ── Manual trigger ────────────────────────────────────
         fired_manual = False
         if manual_trigger:
             manual_trigger = False
@@ -241,18 +259,36 @@ def run_captioning(state, log: CaptionLog):
                 fired_manual = True
                 print("[caption] Manual capture triggered")
 
+        # ── Auto trigger — confirmation window + area gate ────
         fired_auto = False
-        if not fired_manual and auto_enabled and not busy and not on_cooldown:
-            if cur_count != last_count:
+        if (not fired_manual
+                and auto_enabled
+                and not busy
+                and not on_cooldown):
+
+            confirmed = (
+                len(motion_history) == confirm_window          # window full
+                and motion_hits >= confirm_hits                 # enough motion frames
+                and status["motion_area"] >= min_motion_area   # area large enough
+            )
+
+            if confirmed:
                 fired_auto = True
+                print(
+                    f"[caption] Auto trigger — "
+                    f"{motion_hits}/{confirm_window} frames, "
+                    f"area={status['motion_area']}px²"
+                )
+                # Clear history so we don't immediately re-trigger
+                motion_history.clear()
 
-        last_count = cur_count
-
+        # ── Update status display ─────────────────────────────
         if not fired_manual and not fired_auto:
             if not busy and not on_cooldown:
                 state.caption_status = "IDLE" if auto_enabled else "AUTO OFF"
             continue
 
+        # ── Fire inference ────────────────────────────────────
         last_run_ts = now
         busy        = True
         frame       = state.get_frame()
@@ -290,32 +326,22 @@ def run_captioning(state, log: CaptionLog):
 
 def _run_detection(net, frame):
     """Run MobileNet SSD, return human-readable string."""
-    h, w = frame.shape[:2]
-    blob = cv2.dnn.blobFromImage(
-        cv2.resize(frame, (300, 300)), 0.007843, (300, 300), 127.5
-    )
-    net.setInput(blob)
-    detections = net.forward()
+    boxes = _detect_boxes(net, frame)
 
-    found = {}
-    for i in range(detections.shape[2]):
-        confidence = float(detections[0, 0, i, 2])
-        if confidence < _CONFIDENCE:
-            continue
-        idx   = int(detections[0, 0, i, 1])
-        label = _CLASSES[idx] if idx < len(_CLASSES) else "unknown"
-        if label not in _INTERESTING:
-            continue
-        if label not in found or confidence > found[label]:
-            found[label] = confidence
-
-    if not found:
+    if not boxes:
         return "motion detected — no objects identified"
+
+    # Collapse duplicates, keep highest confidence per label
+    found = {}
+    for (_, _, _, _, label, conf) in boxes:
+        if label not in found or conf > found[label]:
+            found[label] = conf
 
     parts = sorted(found.items(), key=lambda x: -x[1])
     if len(parts) == 1:
         label, conf = parts[0]
         return f"{label} detected ({int(conf * 100)}%)"
+
     labels   = " + ".join(p[0] for p in parts)
     top_conf = int(parts[0][1] * 100)
     return f"{labels} detected ({top_conf}%)"
