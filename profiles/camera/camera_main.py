@@ -5,7 +5,8 @@ BearBox — Camera Profile Entry Point
 Wires together:
   - Intro screen
   - Detection thread (OpenCV)
-  - Flask stream thread
+  - Caption thread  (moondream2 AI, lazy load)
+  - Flask stream thread (MJPEG + log UI)
   - LCD display loop (main thread)
 
 Triggered by profile_manager when a USB camera is detected.
@@ -53,6 +54,10 @@ def run():
     from profiles.camera.camera_detect import DetectionState, run_detection
     state = DetectionState()
 
+    # Caption log (shared between caption thread and Flask)
+    from profiles.camera.camera_caption import CaptionLog, run_captioning
+    log = CaptionLog()
+
     # Start detection thread
     det_thread = threading.Thread(
         target=run_detection,
@@ -62,9 +67,18 @@ def run():
     det_thread.start()
     print("[camera] Detection thread started")
 
-    # Start Flask stream thread
+    # Start caption thread
+    cap_thread = threading.Thread(
+        target=run_captioning,
+        args=(state, log),
+        daemon=True
+    )
+    cap_thread.start()
+    print("[camera] Caption thread started (model loads on first motion)")
+
+    # Start Flask stream thread — now also receives log
     from profiles.camera.camera_stream import start_stream
-    start_stream(state, port=port)
+    start_stream(state, log, port=port)
 
     # Run display loop on main thread (blocks until unplugged)
     print("[camera] Starting display loop...")

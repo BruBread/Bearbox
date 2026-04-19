@@ -3,7 +3,7 @@
 BearBox Camera — LCD Display
 
 Two screens, tap to cycle:
-  0 — SURVEILLANCE ACTIVE  (status + stream URL)
+  0 — SURVEILLANCE ACTIVE  (status + stream URL + AI caption status)
   1 — INFO page            (FPS, motion count, last motion, IP)
 
 Reads from DetectionState — no camera access here.
@@ -35,6 +35,16 @@ A = {
     "dimred":   (120,  20,  20),
     "green":    (0,   255,  80),
     "dimgreen": (0,    80,  35),
+}
+
+# Caption status → (display text, color)
+_CAPTION_STYLE = {
+    "IDLE":            ("IDLE",              A["dimamber"]),
+    "MOTION DETECTED": ("MOTION DETECTED",   A["red"]),
+    "LOADING MODEL...":("LOADING MODEL...",  A["amber"]),
+    "PROCESSING...":   ("PROCESSING...",     A["amber"]),
+    "COOLDOWN":        ("COOLDOWN",          A["dimwhite"]),
+    "ERROR":           ("AI ERROR",          A["red"]),
 }
 
 # ── Touch — 64/32-bit safe ────────────────────────────────────
@@ -110,6 +120,7 @@ def _fmt_time(ts):
 def _draw_surveillance(state, pulse, ip, port):
     status    = state.get_status()
     motion    = status["motion"]
+    cap_stat  = status.get("caption_status", "IDLE")
 
     F_big  = font(52, bold=True)
     F_med  = font(18, bold=True)
@@ -134,24 +145,59 @@ def _draw_surveillance(state, pulse, ip, port):
     # main text
     label = "SURVEILLANCE"
     lw    = F_big.getbbox(label)[2]
-    d.text(((W - lw) // 2, 42), label, font=F_big, fill=A["amber"])
+    d.text(((W - lw) // 2, 38), label, font=F_big, fill=A["amber"])
 
     label2 = "ACTIVE" if not motion else "MOTION!"
     col2   = A["dimwhite"] if not motion else A["red"]
     lw2    = F_med.getbbox(label2)[2]
-    d.text(((W - lw2) // 2, 102), label2, font=F_med, fill=col2)
+    d.text(((W - lw2) // 2, 96), label2, font=F_med, fill=col2)
 
     # divider
-    d.line([(30, 130), (W - 30, 130)], fill=A["dimamber"], width=1)
+    d.line([(30, 122), (W - 30, 122)], fill=A["dimamber"], width=1)
+
+    # ── AI caption status row ─────────────────────────────────
+    cap_text, cap_col = _CAPTION_STYLE.get(
+        cap_stat, (cap_stat, A["dimwhite"])
+    )
+
+    # pulsing amber dot when processing
+    if cap_stat in ("PROCESSING...", "LOADING MODEL..."):
+        pulse_frac = abs((pulse % 20) - 10) / 10.0
+        dot_c = (
+            int(120 + pulse_frac * 135),
+            int(50  + pulse_frac * 126),
+            0,
+        )
+    else:
+        dot_c = cap_col
+
+    ai_label = "AI"
+    ai_lw    = F_tiny.getbbox(ai_label)[2]
+    cap_lw   = F_tiny.getbbox(cap_text)[2]
+    row_y    = 130
+
+    d.text((30, row_y), ai_label, font=F_tiny, fill=A["dimamber"])
+    # small indicator dot
+    d.ellipse([30 + ai_lw + 6, row_y + 3,
+               30 + ai_lw + 12, row_y + 9], fill=dot_c)
+    d.text((30 + ai_lw + 18, row_y), cap_text, font=F_tiny, fill=cap_col)
+
+    # divider
+    d.line([(30, 148), (W - 30, 148)], fill=A["darkamber"], width=1)
 
     # stream URL
     url  = f"http://{ip}:{port}/stream"
     uw   = F_small.getbbox(url)[2]
-    d.text(((W - uw) // 2, 142), url, font=F_small, fill=A["dimwhite"])
+    d.text(((W - uw) // 2, 156), url, font=F_small, fill=A["dimwhite"])
 
     hint = "open in browser to view"
     hw   = F_tiny.getbbox(hint)[2]
-    d.text(((W - hw) // 2, 162), hint, font=F_tiny, fill=A["dimamber"])
+    d.text(((W - hw) // 2, 174), hint, font=F_tiny, fill=A["dimamber"])
+
+    # log URL hint
+    log_hint = f"log: :{port}/log/ui"
+    lhw      = F_tiny.getbbox(log_hint)[2]
+    d.text(((W - lhw) // 2, 190), log_hint, font=F_tiny, fill=A["dimamber"])
 
     # footer hint
     d.rectangle([0, H - 24, W, H], fill=A["panel"])
@@ -181,6 +227,10 @@ def _draw_info(state, ip, port):
     tw    = F_hdr.getbbox(title)[2]
     d.text(((W - tw) // 2, 10), title, font=F_hdr, fill=A["amber"])
 
+    # caption status — truncate if too long for the value column
+    cap_stat = status.get("caption_status", "IDLE")
+    cap_col  = _CAPTION_STYLE.get(cap_stat, (cap_stat, A["dimwhite"]))[1]
+
     # rows
     rows = [
         ("FPS",          f"{status['fps']:.1f}",
@@ -191,6 +241,8 @@ def _draw_info(state, ip, port):
          A["dimwhite"]),
         ("STATUS",       "MOTION" if status["motion"] else "CLEAR",
          A["red"] if status["motion"] else A["green"]),
+        ("AI",           cap_stat[:12],   # truncate to fit
+         cap_col),
         ("STREAM",       f":{port}/stream",
          A["dimamber"]),
         ("IP",           ip,
@@ -198,19 +250,17 @@ def _draw_info(state, ip, port):
     ]
 
     y_start = 50
-    row_h   = 38
+    row_h   = 34
     pad_x   = 20
 
     for i, (label, value, val_col) in enumerate(rows):
         y = y_start + i * row_h
-        # subtle row separator
         if i > 0:
             d.line([(pad_x, y - 2), (W - pad_x, y - 2)],
                    fill=A["darkamber"], width=1)
-        lw = F_lbl.getbbox(label)[2]
         vw = F_val.getbbox(value)[2]
-        d.text((pad_x,         y + 8), label, font=F_lbl, fill=A["dimamber"])
-        d.text((W - pad_x - vw, y + 6), value, font=F_val, fill=val_col)
+        d.text((pad_x,          y + 6), label, font=F_lbl, fill=A["dimamber"])
+        d.text((W - pad_x - vw, y + 5), value, font=F_val, fill=val_col)
 
     # footer
     d.rectangle([0, H - 24, W, H], fill=A["panel"])
@@ -233,6 +283,7 @@ def run_display(state, port=5000):
     pulse   = 0
 
     print(f"[display] Stream at http://{ip}:{port}/stream")
+    print(f"[display] Log UI at http://{ip}:{port}/log/ui")
 
     while state.running:
         pulse += 1

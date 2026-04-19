@@ -20,7 +20,7 @@ import numpy as np
 
 
 class DetectionState:
-    """Shared state between detection, display, and stream threads."""
+    """Shared state between detection, display, stream, and caption threads."""
 
     def __init__(self):
         self._lock          = threading.Lock()
@@ -30,6 +30,12 @@ class DetectionState:
         self.fps            = 0.0
         self.last_motion_ts = None   # time.time() of last motion event
         self.running        = True   # set False to stop the thread
+
+        # Caption pipeline status — read by display loop, written by caption thread
+        # Values: "IDLE" | "MOTION DETECTED" | "PROCESSING..." | "COOLDOWN" | "ERROR"
+        self.caption_status  = "IDLE"
+        # Latest caption text — written by caption thread, read by display + Flask
+        self.latest_caption  = None
 
     def update(self, frame, motion, fps):
         with self._lock:
@@ -48,10 +54,12 @@ class DetectionState:
     def get_status(self):
         with self._lock:
             return {
-                "motion":       self.motion,
-                "motion_count": self.motion_count,
-                "fps":          round(self.fps, 1),
-                "last_motion":  self.last_motion_ts,
+                "motion":          self.motion,
+                "motion_count":    self.motion_count,
+                "fps":             round(self.fps, 1),
+                "last_motion":     self.last_motion_ts,
+                "caption_status":  self.caption_status,
+                "latest_caption":  self.latest_caption,
             }
 
 
