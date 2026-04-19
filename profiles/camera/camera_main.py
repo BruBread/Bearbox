@@ -36,7 +36,7 @@ def _load_camera_config():
         "threshold":    cam.get("motion_threshold", 500),
         "detect_every": cam.get("detect_every", 3),
         "blur_size":    cam.get("blur_size", 21),
-        "stream_port":  cam.get("stream_port", 5000),
+        "stream_port":  cam.get("stream_port", 80),
     }
 
 # ── Entry point ───────────────────────────────────────────────
