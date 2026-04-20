@@ -43,9 +43,9 @@ manual_trigger = False
 SEND_COOLDOWN    = 15.0   # seconds between auto sends
 BEACON_TIMEOUT   = 0.3    # seconds per host during LAN scan
 RESCAN_INTERVAL  = 30.0   # seconds between rescans when server not found
-SEND_WIDTH       = 480    # resize frame to this width before sending
+SEND_WIDTH       = 480      # resize frame to this width before sending
 SEND_HEIGHT      = 360    # resize frame to this height before sending
-SEND_QUALITY     = 60     # JPEG quality for sent frames (lower = faster)
+SEND_QUALITY     = 85     # JPEG quality for sent frames (lower = faster)
 
 
 # ── Caption Log ────────────────────────────────────────────────
