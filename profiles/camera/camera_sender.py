@@ -124,21 +124,39 @@ def _check_beacon(ip: str, port: int, timeout: float) -> bool:
 
 
 def _scan_for_server(port: int, hint_ip: str = "") -> str | None:
-    """
-    Scan the local /24 subnet for a BearBox server.
-    Tries hint_ip first if provided (e.g. laptop_ip from config).
-    Returns 'http://x.x.x.x:port' or None.
-    """
     if hint_ip:
         print(f"[sender] Trying hint IP {hint_ip}...")
         if _check_beacon(hint_ip, port, timeout=1.0):
-            print(f"[sender] Found server at hint IP {hint_ip}")
             return f"http://{hint_ip}:{port}"
 
+    # Check ARP table first — only devices actually connected
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["arp", "-a"], capture_output=True, text=True
+        )
+        arp_ips = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            for p in parts:
+                p = p.strip("()")
+                try:
+                    ipaddress.IPv4Address(p)
+                    arp_ips.append(p)
+                except Exception:
+                    pass
+        print(f"[sender] ARP scan — checking {len(arp_ips)} connected devices")
+        for ip in arp_ips:
+            if _check_beacon(ip, port, timeout=1.0):
+                print(f"[sender] Found server at {ip}")
+                return f"http://{ip}:{port}"
+    except Exception as e:
+        print(f"[sender] ARP scan failed: {e}")
+
+    # Fall back to full subnet scan
     local_ip = _get_local_ip()
     subnet   = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
-    print(f"[sender] Scanning {subnet} for BearBox server on port {port}...")
-
+    print(f"[sender] Full scan {subnet}...")
     for host in subnet.hosts():
         ip = str(host)
         if ip == local_ip:
@@ -147,7 +165,7 @@ def _scan_for_server(port: int, hint_ip: str = "") -> str | None:
             print(f"[sender] Found server at {ip}")
             return f"http://{ip}:{port}"
 
-    print("[sender] No BearBox server found on LAN")
+    print("[sender] No BearBox server found")
     return None
 
 
