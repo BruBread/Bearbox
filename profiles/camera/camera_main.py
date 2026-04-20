@@ -9,6 +9,8 @@ Wires together:
   - Flask stream thread (MJPEG + log UI)
   - LCD display loop  (main thread)
 
+
+
 Triggered by profile_manager when Jieli USB camera (4c4a:4a55) is detected.
 Can also be run standalone:
     sudo env PYTHONPATH=/home/bearbox/bearbox/core:/home/bearbox/bearbox \
