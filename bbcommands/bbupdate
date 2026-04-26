@@ -1,0 +1,16 @@
+#!/bin/bash
+BB=/home/bearbox/bearbox
+PYPATH="$BB/core:$BB"
+
+cd $BB || exit 1
+echo "Pulling latest..."
+git pull
+echo "Launching restart screen..."
+sudo env PYTHONPATH=$PYPATH python3 $BB/core/screen_restarting.py &
+SCREEN_PID=$!
+sleep 1
+echo "Restarting BearBox..."
+sudo systemctl restart bearbox
+sleep 1
+kill $SCREEN_PID 2>/dev/null
+echo "Done."

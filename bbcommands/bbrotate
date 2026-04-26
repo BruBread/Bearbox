@@ -1,0 +1,11 @@
+#!/bin/bash
+BB=/home/bearbox/bearbox
+ROTATE_FILE="$BB/.rotate"
+current=$(cat "$ROTATE_FILE" 2>/dev/null || echo "180")
+if [ "$current" = "180" ]; then
+    echo "0" > "$ROTATE_FILE"
+    echo "Rotation set to 0°. Run bbrestart to apply."
+else
+    echo "180" > "$ROTATE_FILE"
+    echo "Rotation set to 180°. Run bbrestart to apply."
+fi

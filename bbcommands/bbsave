@@ -1,0 +1,15 @@
+#!/bin/bash
+read -p "SSID: " S
+read -p "Password (blank=open): " P
+python3 - <<EOF
+import json
+path = "/home/bearbox/bearbox/config.json"
+try:
+    c = json.load(open(path))
+except Exception:
+    c = {}
+c.setdefault("saved_networks", {})["$S"] = "$P"
+json.dump(c, open(path, "w"), indent=4)
+print("Saved: $S")
+EOF
+echo "Run bbrestart for BearBox to pick it up on next boot."

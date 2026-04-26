@@ -1,0 +1,5 @@
+#!/bin/bash
+touch /tmp/bb_force_offline
+sudo nmcli device disconnect wlan0 2>/dev/null
+echo "Forced offline. Run bbonline to re-enable auto-connect."
+sudo systemctl restart bearbox

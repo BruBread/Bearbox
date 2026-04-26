@@ -1,0 +1,5 @@
+#!/bin/bash
+IFACE="${1:-wlan0}"
+echo "Disconnecting $IFACE..."
+sudo nmcli device disconnect "$IFACE" 2>/dev/null
+echo "Disconnected."

@@ -1,0 +1,10 @@
+#!/bin/bash
+echo "=== Live logs (Ctrl+C to exit) ==="
+touch /tmp/pentest_crash.log /tmp/bearbox_boot.log
+tail -f /tmp/pentest_crash.log &
+CRASH_PID=$!
+tail -f /tmp/bearbox_boot.log &
+BOOT_PID=$!
+sudo journalctl -u bearbox -f --no-pager
+kill $CRASH_PID 2>/dev/null
+kill $BOOT_PID 2>/dev/null

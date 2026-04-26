@@ -1,0 +1,40 @@
+#!/bin/bash
+cd /home/bearbox/bearbox || exit 1
+echo "=== BearBox Git Repair ==="
+echo "Checking for corrupted objects..."
+CORRUPT=$(git fsck --full 2>&1 | grep "empty\|corrupt\|missing" | wc -l)
+if [ "$CORRUPT" -eq 0 ]; then
+    echo "No corruption found. Try bbupdate."
+    exit 0
+fi
+echo "Found $CORRUPT corrupted object(s). Attempting repair..."
+
+echo "[1/4] Removing empty object files..."
+find .git/objects -type f -empty -delete
+
+echo "[2/4] Fetching from remote..."
+git fetch --all 2>&1
+git reset --hard origin/main 2>&1 && {
+    echo "Repair successful via reset."
+    echo "Restarting BearBox..."
+    sudo systemctl restart bearbox
+    exit 0
+}
+
+echo "[3/4] Reset failed — rebuilding git history..."
+echo "Backing up to ~/bearbox_backup..."
+cp -r ~/bearbox ~/bearbox_backup 2>/dev/null
+rm -rf .git
+git init
+git remote add origin https://github.com/BruBread/Bearbox.git
+git fetch origin
+
+echo "[4/4] Restoring files from remote..."
+git checkout -b main --track origin/main 2>/dev/null || \
+git checkout -b master --track origin/main 2>/dev/null
+git reset --hard origin/main
+
+echo "=== Git repair complete ==="
+echo "Backup saved at ~/bearbox_backup"
+echo "Restarting BearBox..."
+sudo systemctl restart bearbox

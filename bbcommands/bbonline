@@ -1,0 +1,4 @@
+#!/bin/bash
+rm -f /tmp/bb_force_offline
+echo "Auto-connect re-enabled."
+sudo systemctl restart bearbox

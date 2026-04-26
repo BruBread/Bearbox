@@ -1,0 +1,44 @@
+#!/bin/bash
+cat << 'EOF'
+╔══════════════════════════════════════════════════════════╗
+║                   BearBox Commands                       ║
+╠══════════════════════════════════════════════════════════╣
+║  SERVICE                                                 ║
+║    bbstart       Start the service                       ║
+║    bbstop        Stop the service (keeps autostart)      ║
+║    bbrestart     Restart the service                     ║
+║    bbstatus      Show service status                     ║
+║    bblogs        Tail all logs (journal+crash+boot)      ║
+║    bbshutdown    Play shutdown screen then stop          ║
+║                                                          ║
+║  DEV                                                     ║
+║    bbedit        cd into ~/bearbox                       ║
+║    bbupdate      git pull + auto restart                 ║
+║    bbconfig      Edit config.json                        ║
+║    bbinstall     Re-run install.sh                       ║
+║    bbscreen      Run a screen standalone                 ║
+║                  [clock|hello|bear|offline|boot]         ║
+║                                                          ║
+║  WIFI                                                    ║
+║    bbwifi        Connect to a network                    ║
+║    bbdisconnect  Disconnect (optional: iface name)       ║
+║    bbsave        Save a network to config.json           ║
+║    bbip          Show all IPs                            ║
+║    bbnetwork     Show SSID, IP and internet status       ║
+║    bboffline     Force offline mode for testing          ║
+║    bbonline      Re-enable auto-connect                  ║
+║                                                          ║
+║  DISPLAY                                                 ║
+║    bbrotate      Toggle 180° screen flip                 ║
+║                                                          ║
+║  PENTEST                                                 ║
+║    bbpentest     Show pentest module status              ║
+║    bbpencrash    Show last pentest crash log             ║
+║                                                          ║
+║  GIT                                                     ║
+║    bbgitfix      Auto-repair corrupted git objects       ║
+║                                                          ║
+║  DANGER ZONE                                             ║
+║    bbreset       Completely wipe BearBox from this Pi    ║
+╚══════════════════════════════════════════════════════════╝
+EOF

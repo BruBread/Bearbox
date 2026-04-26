@@ -1,0 +1,7 @@
+#!/bin/bash
+SSID=$(iwgetid -r 2>/dev/null || echo "none")
+IP=$(hostname -I | awk '{print $1}')
+ping -c 1 -W 2 8.8.8.8 &>/dev/null && INET="yes" || INET="no"
+echo "SSID:     $SSID"
+echo "IP:       $IP"
+echo "Internet: $INET"

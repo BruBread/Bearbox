@@ -1,0 +1,4 @@
+#!/bin/bash
+sudo systemctl stop bearbox
+echo "BearBox stopped. Will restart on next reboot."
+echo "Run bbstart to bring it back, or reboot to auto-start."

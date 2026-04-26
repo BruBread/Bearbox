@@ -1,0 +1,14 @@
+#!/bin/bash
+echo "WARNING: This will completely wipe BearBox from this Pi."
+read -p "Type CONFIRM to proceed: " confirm
+if [ "$confirm" = "CONFIRM" ]; then
+    sudo systemctl stop bearbox 2>/dev/null
+    sudo rm -rf /home/bearbox/bearbox
+    sudo rm -f /etc/systemd/system/bearbox.service
+    sudo rm -f /etc/udev/rules.d/99-bearbox.rules
+    sudo systemctl daemon-reload
+    sed -i "/bearbox/d" /home/bearbox/.bashrc
+    echo "BearBox wiped. Clone repo and run install.sh to reinstall."
+else
+    echo "Cancelled."
+fi

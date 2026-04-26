@@ -1,0 +1,12 @@
+#!/bin/bash
+BB=/home/bearbox/bearbox
+PYPATH="$BB/core:$BB"
+
+case "$1" in
+    clock)   sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/clock.py ;;
+    hello)   sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/hello.py ;;
+    bear)    sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/bear.py ;;
+    offline) sudo env PYTHONPATH=$PYPATH python3 $BB/core/idle/hello_offline.py ;;
+    boot)    sudo env PYTHONPATH=$PYPATH python3 $BB/core/boot_anim.py ;;
+    *)       echo "Usage: bbscreen [clock|hello|bear|offline|boot]" ;;
+esac

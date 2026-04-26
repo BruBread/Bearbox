@@ -1,0 +1,12 @@
+#!/bin/bash
+read -p "SSID: " SSID
+read -p "Password (leave blank if open): " PASS
+echo "Connecting to $SSID..."
+if [ -z "$PASS" ]; then
+    sudo nmcli device wifi connect "$SSID" ifname wlan0
+else
+    sudo nmcli device wifi connect "$SSID" password "$PASS" ifname wlan0
+fi
+sleep 2
+echo "SSID: $(iwgetid -r 2>/dev/null || echo none)"
+echo "IP:   $(hostname -I | awk '{print $1}')"

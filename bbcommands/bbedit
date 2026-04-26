@@ -1,0 +1,5 @@
+#!/bin/bash
+# bbedit needs to change the calling shell's directory.
+# As a script it can't do that — print a reminder and exec a subshell instead.
+# For a true cd, keep "alias bbedit='cd ~/bearbox'" in ~/.bashrc alongside this.
+cd /home/bearbox/bearbox && exec bash

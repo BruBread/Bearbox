@@ -1,0 +1,7 @@
+#!/bin/bash
+read -p "Re-run install.sh? This may overwrite config. (y/n): " confirm
+if [ "$confirm" = "y" ]; then
+    cd /home/bearbox/bearbox && sudo bash install.sh
+else
+    echo "Cancelled."
+fi
