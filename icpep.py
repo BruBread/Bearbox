@@ -4,7 +4,7 @@ ICpEP.SE Recruitment Screen for BearBox
 Drop in: /home/bearbox/bearbox/icpep.py
 Run:     python /home/bearbox/bearbox/icpep.py
 
-━━━ CONFIGURE HERE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ CONFIGURE HERE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 LINES = [
@@ -17,32 +17,157 @@ LINES = [
 LINE_SPACING = 12   # px gap between lines
 
 # ── Color config (R, G, B) ─────────────────────────────────────
-# The idle and intro animations pulse between BASE_COLOR and BRIGHT_COLOR.
-# SHADOW_COLOR is the drop-shadow behind the text.
-# GLITCH_COLOR is used for random artifact characters during the intro.
-
-BASE_COLOR   = (0, 130, 220)   # dimmer pulse extreme   — default: cyan-blue
-BRIGHT_COLOR = (0, 255, 255)   # brighter pulse extreme — default: bright cyan
-SHADOW_COLOR = (0,  10,  25)   # drop shadow            — default: near-black
-GLITCH_COLOR = (0,  55,  85)   # intro glitch artifacts — default: dark cyan
+BASE_COLOR   = (0, 130, 220)
+BRIGHT_COLOR = (0, 255, 255)
+SHADOW_COLOR = (0,  10,  25)
+GLITCH_COLOR = (0,  55,  85)
 
 """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import time, os, sys, math, random, string, subprocess, signal
+import threading, tty, termios
 
 sys.path.insert(0, "/home/bearbox/bearbox/core")
 from display import new_frame, push, font, W, H
 import network.net_utils as _net_utils
 from network.net_utils import check_tap
 
+# ── LED setup ──────────────────────────────────────────────────
+try:
+    import lgpio
+    # BOARD pins: 29,31,33,32,36,37 -> BCM: 5,6,13,12,16,26
+    LED_PINS_BCM = [5, 6, 13, 12, 16, 26]
+    _led_handle  = lgpio.gpiochip_open(0)
+    for _pin in LED_PINS_BCM:
+        lgpio.gpio_claim_output(_led_handle, _pin)
+    LED_AVAILABLE = True
+except Exception as e:
+    print(f"[icpep] lgpio not available, LEDs disabled: {e}")
+    LED_AVAILABLE = False
+
+# ── LED helpers ────────────────────────────────────────────────
+def _all_off():
+    if not LED_AVAILABLE:
+        return
+    for pin in LED_PINS_BCM:
+        lgpio.gpio_write(_led_handle, pin, 0)
+
+def _led_write(pin, val):
+    if LED_AVAILABLE:
+        lgpio.gpio_write(_led_handle, pin, val)
+
+# ── LED pattern functions ──────────────────────────────────────
+def pattern_off():
+    _all_off()
+    time.sleep(0.1)
+
+def pattern_all_blink():
+    for pin in LED_PINS_BCM:
+        _led_write(pin, 1)
+    time.sleep(0.5)
+    _all_off()
+    time.sleep(0.5)
+
+def pattern_alternating():
+    even_pins = LED_PINS_BCM[::2]
+    odd_pins  = LED_PINS_BCM[1::2]
+    for p in even_pins: _led_write(p, 1)
+    for p in odd_pins:  _led_write(p, 0)
+    time.sleep(0.5)
+    for p in even_pins: _led_write(p, 0)
+    for p in odd_pins:  _led_write(p, 1)
+    time.sleep(0.5)
+
+def pattern_running_lights():
+    for pin in LED_PINS_BCM:
+        _all_off()
+        _led_write(pin, 1)
+        time.sleep(0.1)
+    for pin in reversed(LED_PINS_BCM):
+        _all_off()
+        _led_write(pin, 1)
+        time.sleep(0.1)
+
+def pattern_chase():
+    for i in range(len(LED_PINS_BCM)):
+        _all_off()
+        for p in LED_PINS_BCM[:i + 1]:
+            _led_write(p, 1)
+        time.sleep(0.1)
+    for i in range(len(LED_PINS_BCM), 0, -1):
+        _all_off()
+        for p in LED_PINS_BCM[:i]:
+            _led_write(p, 1)
+        time.sleep(0.1)
+
+def pattern_random_twinkle():
+    _all_off()
+    _led_write(random.choice(LED_PINS_BCM), 1)
+    time.sleep(0.05)
+
+# ── Pattern list — index 0 is always OFF ──────────────────────
+LED_PATTERNS = [
+    pattern_off,
+    pattern_all_blink,
+    pattern_alternating,
+    pattern_running_lights,
+    pattern_chase,
+    pattern_random_twinkle,
+]
+LED_PATTERN_NAMES = [
+    "Off",
+    "All Blink",
+    "Alternating",
+    "Running Lights",
+    "Chase",
+    "Random Twinkle",
+]
+
+_led_pattern_index = 0   # start at Off
+_led_lock          = threading.Lock()
+
+def _get_pattern_index():
+    with _led_lock:
+        return _led_pattern_index
+
+def _next_pattern():
+    global _led_pattern_index
+    with _led_lock:
+        _led_pattern_index = (_led_pattern_index + 1) % len(LED_PATTERNS)
+        name = LED_PATTERN_NAMES[_led_pattern_index]
+    print(f"\n[icpep] LED pattern → {name}")
+
+# ── LED runner thread ──────────────────────────────────────────
+def _led_runner():
+    """Continuously calls the current LED pattern function."""
+    while True:
+        idx = _get_pattern_index()
+        LED_PATTERNS[idx]()
+
+# ── Keyboard listener ──────────────────────────────────────────
+def _keyboard_listener():
+    """Listens for SPACE (next pattern) and Ctrl+C (exit)."""
+    fd           = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == ' ':
+                _next_pattern()
+            elif ch == '\x03':   # Ctrl+C
+                _cleanup()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 BLACK        = (0, 0, 0)
 GLITCH_CHARS = list(string.ascii_uppercase + string.digits + "@#$%&!?|/<>[]")
 
 # ── Color interpolation helper ────────────────────────────────
 def _lerp_color(a, b, t):
-    """Linearly interpolate between two RGB tuples by factor t (0.0–1.0)."""
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 # ── Build fonts from config ────────────────────────────────────
@@ -63,7 +188,6 @@ def _start_service():
 
 # ── Layout helper — centered block ───────────────────────────
 def _layout(lines_fonts):
-    """Return list of (txt, fnt, x, y, th, line_color) centered on screen."""
     total_h = sum(fnt.getbbox(txt)[3] for txt, fnt, _ in lines_fonts)
     total_h += LINE_SPACING * (len(lines_fonts) - 1)
     y = (H - total_h) // 2
@@ -79,7 +203,6 @@ def _layout(lines_fonts):
 # ── CRT shutdown animation ────────────────────────────────────
 def _play_shutdown():
     start = time.time()
-    small = font(13)
     while True:
         t      = time.time() - start
         img, d = new_frame(bg=BLACK)
@@ -155,7 +278,6 @@ def _play_intro():
                 tw  = fnt.getbbox(display)[2]
                 cx  = (W - tw) // 2
 
-                # Use per-line color if set, otherwise pulse between BASE/BRIGHT
                 if line_color is not None:
                     col = tuple(int(c * min(1.0, resolved + pulse * 0.15)) for c in line_color)
                 else:
@@ -196,6 +318,9 @@ def _draw_idle(d):
 # ── Cleanup ───────────────────────────────────────────────────
 def _cleanup(sig=None, frame=None):
     print("\n[icpep] restoring bearbox...")
+    _all_off()
+    if LED_AVAILABLE:
+        lgpio.gpiochip_close(_led_handle)
     for _ in range(15):
         img, d = new_frame(bg=BLACK)
         push(img)
@@ -216,7 +341,13 @@ if __name__ == "__main__":
     _play_shutdown()
     _play_intro()
 
-    print("[icpep] running — Ctrl+C or tap to exit")
+    # Start LED runner and keyboard listener as background threads
+    threading.Thread(target=_led_runner,        daemon=True).start()
+    threading.Thread(target=_keyboard_listener, daemon=True).start()
+
+    print("[icpep] running — SPACE cycles LED pattern, Ctrl+C or tap to exit")
+    print(f"[icpep] LED pattern → {LED_PATTERN_NAMES[_led_pattern_index]}")
+
     while True:
         img, d = new_frame(bg=BLACK)
         _draw_idle(d)
