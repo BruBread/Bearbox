@@ -10,3 +10,6 @@ alias grep='grep --color=auto'
 
 # bbedit — kept as alias because scripts can't cd the calling shell
 alias bbedit='cd ~/bearbox'
+
+# bbdoom — launch Doom directly (stops bearbox.service, runs doomgeneric via games profile)
+alias bbdoom='sudo python3 /home/bearbox/bearbox/profiles/games/games_main.py'

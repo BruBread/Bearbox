@@ -14,7 +14,7 @@ LINES = [
     ("ENGINEERING",     84),
 ]
 
-LINE_SPACING = 12   # px gap between lines
+LINE_SPACING = 12
 
 # ── Color config (R, G, B) ─────────────────────────────────────
 BASE_COLOR   = (0, 130, 220)
