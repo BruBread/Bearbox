@@ -30,6 +30,7 @@ cat << 'EOF'
 ║                                                          ║
 ║  DISPLAY                                                 ║
 ║    bbrotate      Toggle 180° screen flip                 ║
+║                  (run bbrestart to apply)                ║
 ║                                                          ║
 ║  PENTEST                                                 ║
 ║    bbpentest     Show pentest module status              ║
@@ -37,6 +38,9 @@ cat << 'EOF'
 ║                                                          ║
 ║  GIT                                                     ║
 ║    bbgitfix      Auto-repair corrupted git objects       ║
+║                                                          ║
+║  GAMES                                                   ║
+║    bbdoom        Launch Doom directly (alias)            ║
 ║                                                          ║
 ║  DANGER ZONE                                             ║
 ║    bbreset       Completely wipe BearBox from this Pi    ║

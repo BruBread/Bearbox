@@ -1,0 +1,6 @@
+#!/bin/bash
+echo "Stopping BearBox service..."
+sudo systemctl stop bearbox
+sleep 0.5
+echo "Launching Doom..."
+sudo python3 /home/bearbox/bearbox/profiles/games/games_main.py

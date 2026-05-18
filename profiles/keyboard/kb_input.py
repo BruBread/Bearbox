@@ -20,7 +20,7 @@ EVENT_FORMAT_32 = "iIHHi"   # 16 bytes — 32-bit (fallback)
 EVENT_SIZE_64   = struct.calcsize(EVENT_FORMAT_64)
 EVENT_SIZE_32   = struct.calcsize(EVENT_FORMAT_32)
 
-EV_KEY   = 1
+EV_KEY      = 1
 KEY_PRESS   = 1
 KEY_REPEAT  = 2
 KEY_RELEASE = 0
@@ -69,62 +69,72 @@ KEY_PGDN      = 109
 KEY_DELETE    = 111
 KEY_INSERT    = 110
 
-SHIFT_KEYS   = {KEY_LSHIFT, KEY_RSHIFT}
-CTRL_KEYS    = {KEY_LCTRL, KEY_RCTRL}
+SHIFT_KEYS    = {KEY_LSHIFT, KEY_RSHIFT}
+CTRL_KEYS     = {KEY_LCTRL,  KEY_RCTRL}
 MODIFIER_KEYS = SHIFT_KEYS | CTRL_KEYS | {KEY_CAPSLOCK}
 
 
 def find_keyboard_device():
-    """Find the first keyboard-like event device."""
-    input_dir = "/dev/input"
-    by_id     = "/dev/input/by-id"
+    """
+    Find the first non-touchscreen USB keyboard event device.
+    Parses /proc/bus/input/devices properly — no fragile name matching.
+    Uses the same EV_KEY bitmask logic as profile_manager.detect_keyboard().
+    """
+    try:
+        with open("/proc/bus/input/devices") as f:
+            content = f.read()
+    except Exception:
+        return None
 
-    # prefer by-id symlinks with 'kbd' in name
-    if os.path.exists(by_id):
-        for name in os.listdir(by_id):
-            if "kbd" in name.lower() or "keyboard" in name.lower():
-                path = os.path.join(by_id, name)
-                real = os.path.realpath(path)
-                if os.path.exists(real):
-                    return real
+    # Split on blank lines, drop empty chunks
+    blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
 
-    # fall back: scan /dev/input/event* and pick one that has key events
-    # skip event0 which is usually the touchscreen
-    for i in range(1, 20):
-        path = f"{input_dir}/event{i}"
-        if not os.path.exists(path):
+    for block in blocks:
+        lines    = block.split("\n")
+        ev_val   = None
+        handlers = []
+
+        for line in lines:
+            line = line.strip()
+
+            if line.startswith("B: EV="):
+                try:
+                    ev_val = int(line.split("=")[1].strip(), 16)
+                except ValueError:
+                    pass
+
+            if line.startswith("H: Handlers="):
+                handlers = line.split("=", 1)[1].split()
+
+        # Must have EV_KEY (bit 1 set)
+        if ev_val is None or not (ev_val & (1 << 1)):
             continue
-        try:
-            # check /proc/bus/input/devices for keyboard capability
-            with open("/proc/bus/input/devices") as f:
-                content = f.read()
-            # find the block for this event number
-            for block in content.split("\n\n"):
-                if f"event{i}" in block and (
-                    "keyboard" in block.lower() or
-                    "kbd" in block.lower() or
-                    # check EV= bitmask: 0x120013 or similar includes EV_KEY
-                    ("EV=" in block and _has_ev_key(block))
-                ):
-                    return path
-        except:
-            pass
 
-    # last resort: event1
-    if os.path.exists(f"{input_dir}/event1"):
-        return f"{input_dir}/event1"
+        # Find event nodes, skip event0 (touchscreen)
+        event_nodes = [
+            h for h in handlers
+            if h.startswith("event") and h != "event0"
+        ]
+        if not event_nodes:
+            continue
 
+        path = f"/dev/input/{event_nodes[0]}"
+        if os.path.exists(path):
+            print(f"[keyboard] found device: {path}")
+            return path
+
+    print("[keyboard] no keyboard device found in /proc/bus/input/devices")
     return None
 
 
 def _has_ev_key(block):
-    """Check if the EV= bitmask in a /proc/bus/input/devices block includes EV_KEY (bit 1)."""
+    """Check if the EV= bitmask in a block includes EV_KEY (bit 1)."""
     try:
         for line in block.split("\n"):
             if line.strip().startswith("B: EV="):
                 val = int(line.split("=")[1].strip(), 16)
                 return bool(val & (1 << 1))
-    except:
+    except Exception:
         pass
     return False
 
@@ -160,11 +170,11 @@ class KeyboardReader:
             print("[keyboard] No keyboard device found")
             return False
         try:
-            self._fd = open(self.device, "rb")
-            # detect struct size from first read
+            self._fd      = open(self.device, "rb")
             self._running = True
             self._thread  = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
+            print(f"[keyboard] Listening on {self.device}")
             return True
         except PermissionError:
             print(f"[keyboard] Permission denied: {self.device} — run as root")
@@ -178,7 +188,7 @@ class KeyboardReader:
         if self._fd:
             try:
                 self._fd.close()
-            except:
+            except Exception:
                 pass
 
     def get_char(self):
@@ -189,12 +199,11 @@ class KeyboardReader:
         return None
 
     def _read_loop(self):
-        # auto-detect struct size on first successful parse
-        detected   = False
-        retry_wait = 0.5   # seconds between reconnect attempts
+        detected    = False
+        retry_wait  = 0.5
         max_retries = 10
 
-        # small delay to let USB device fully initialize
+        # Small delay to let USB device fully initialise
         time.sleep(0.8)
 
         retries = 0
@@ -203,24 +212,36 @@ class KeyboardReader:
                 r, _, _ = select.select([self._fd], [], [], 0.1)
                 if not r:
                     continue
+
                 data = self._fd.read(self._evsz)
-                if not data or len(data) != self._evsz:
-                    if not detected:
+
+                if not data:
+                    continue
+
+                # Auto-detect struct size on first read
+                if not detected:
+                    if len(data) == EVENT_SIZE_32:
                         self._fmt  = EVENT_FORMAT_32
                         self._evsz = EVENT_SIZE_32
+                        print(f"[keyboard] using 32-bit event struct ({EVENT_SIZE_32}B)")
+                    else:
+                        print(f"[keyboard] using 64-bit event struct ({EVENT_SIZE_64}B)")
+                    detected = True
+
+                if len(data) != self._evsz:
                     continue
+
                 self._parse(data)
-                detected = True
-                retries  = 0   # reset retry counter on successful read
+                retries = 0
+
             except Exception as e:
                 if not self._running:
                     break
                 retries += 1
-                print(f"[keyboard] Read error ({retries}/{max_retries}): {e}")
+                print(f"[keyboard] read error ({retries}/{max_retries}): {e}")
                 if retries >= max_retries:
-                    print("[keyboard] Max retries reached, giving up")
+                    print("[keyboard] max retries reached, giving up")
                     break
-                # close and reopen the device
                 try:
                     self._fd.close()
                 except Exception:
@@ -228,9 +249,10 @@ class KeyboardReader:
                 time.sleep(retry_wait)
                 try:
                     self._fd = open(self.device, "rb")
-                    print(f"[keyboard] Reconnected to {self.device}")
+                    print(f"[keyboard] reconnected to {self.device}")
+                    detected = False
                 except Exception as reopen_err:
-                    print(f"[keyboard] Reopen failed: {reopen_err}")
+                    print(f"[keyboard] reopen failed: {reopen_err}")
 
     def _parse(self, data):
         try:
@@ -238,7 +260,7 @@ class KeyboardReader:
             etype    = unpacked[-3]
             ecode    = unpacked[-2]
             evalue   = unpacked[-1]
-        except:
+        except Exception:
             return
 
         if etype != EV_KEY:
@@ -248,18 +270,18 @@ class KeyboardReader:
             if ecode in SHIFT_KEYS:
                 self._shift = False
             elif ecode in CTRL_KEYS:
-                self._ctrl = False
+                self._ctrl  = False
             return
 
         if evalue not in (KEY_PRESS, KEY_REPEAT):
             return
 
-        # modifiers
+        # Modifiers
         if ecode in SHIFT_KEYS:
             self._shift = True
             return
         if ecode in CTRL_KEYS:
-            self._ctrl = True
+            self._ctrl  = True
             return
         if ecode == KEY_CAPSLOCK and evalue == KEY_PRESS:
             self._caps = not self._caps
@@ -271,36 +293,32 @@ class KeyboardReader:
                 self._queue.append(key)
 
     def _translate(self, ecode):
-        # ctrl combos
+        # Ctrl combos
         if self._ctrl:
             ctrl_map = {
-                30: "CTRL_A",  # a
-                32: "CTRL_D",  # d — EOF
-                33: "CTRL_F",
-                35: "CTRL_H",
-                38: "CTRL_L",  # clear
+                30: "CTRL_A",
+                46: "CTRL_C",
+                32: "CTRL_D",
+                38: "CTRL_L",
                 49: "CTRL_N",
                 25: "CTRL_P",
-                20: "CTRL_T",
-                22: "CTRL_U",  # clear line
+                19: "CTRL_R",
+                22: "CTRL_U",
                 47: "CTRL_V",
-                23: "CTRL_W",  # delete word
+                23: "CTRL_W",
                 45: "CTRL_X",
                 21: "CTRL_Y",
                 44: "CTRL_Z",
-                46: "CTRL_C",  # interrupt
-                3:  "CTRL_C",  # keycode 3 also maps to ^C on some boards
-                28: "CTRL_M",  # enter
-                14: "CTRL_H",  # backspace
-                19: "CTRL_R",  # history search
-                35: "CTRL_H",
+                28: "CTRL_M",
+                14: "CTRL_H",
                 36: "CTRL_J",
                 37: "CTRL_K",
-                4:  "CTRL_C",
+                33: "CTRL_F",
+                35: "CTRL_H",
             }
             return ctrl_map.get(ecode)
 
-        # special keys
+        # Special keys
         special = {
             KEY_BACKSPACE: "BACKSPACE",
             KEY_ENTER:     "ENTER",
@@ -319,10 +337,9 @@ class KeyboardReader:
         if ecode in special:
             return special[ecode]
 
-        # printable characters
+        # Printable characters
         if ecode in KEYMAP:
             unshifted, shifted = KEYMAP[ecode]
-            # caps lock only affects letters
             is_letter = unshifted.isalpha()
             use_shift = self._shift
             if is_letter and self._caps:

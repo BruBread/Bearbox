@@ -1,3 +1,4 @@
+#!/bin/bash
 set -e
 BLK='\033[0;30m'
 RED='\033[0;31m'
@@ -67,9 +68,10 @@ echo ""
 divider
 echo -e "  ${BYLW}Profiles:${NC}"
 echo -e "  ${CYN}⚡${NC} TL-WN722N    →  ${BGRN}Pentest Mode${NC}"
-echo -e "  ${CYN}🎮${NC} USB Drive    →  ${BGRN}Game Launcher${NC}"
+echo -e "  ${CYN}🎮${NC} USB Drive    →  ${BGRN}Game Launcher (Doom)${NC}"
 echo -e "  ${CYN}🦆${NC} Rubber Ducky →  ${BGRN}Ducky Scripts${NC}"
-echo -e "  ${CYN}📡${NC} BT Adapter   →  ${BGRN}Bluetooth Tools${NC}"
+echo -e "  ${CYN}📷${NC} USB Camera   →  ${BGRN}Surveillance + AI${NC}"
+echo -e "  ${CYN}⌨${NC}  USB Keyboard →  ${BGRN}LCD Terminal${NC}"
 divider
 echo ""
 
@@ -115,19 +117,28 @@ PACKAGES=(
     ntpdate
     hostapd
     dnsmasq
-    # portal dependencies
     python3-flask
     python3-smbus
     i2c-tools
-    # pentest profile dependencies
     bettercap
     nmap
     nikto
     gobuster
     hcxdumptool
+    # Doom dependencies
+    build-essential
+    libsdl2-dev
+    libsdl2-mixer-dev
+    libsdl2-image-dev
+    libsdl2-net-dev
+    # Camera dependencies
+    python3-opencv
+    libopencv-dev
+    # GPIO (for icpep.py LEDs)
+    python3-lgpio
+    lgpio
 )
 for pkg in "${PACKAGES[@]}"; do
-    # skip comment lines
     [[ "$pkg" == \#* ]] && continue
     (apt install -y -qq "$pkg" 2>/dev/null) &
     spinner $! "Installing $pkg"
@@ -143,6 +154,7 @@ PIP_PACKAGES=(
     pillow
     requests
     sseclient-py
+    lgpio
 )
 for pkg in "${PIP_PACKAGES[@]}"; do
     (pip3 install "$pkg" --break-system-packages -q 2>/dev/null) &
@@ -163,39 +175,32 @@ DRIVER_KO="/lib/modules/${KERNEL}/kernel/drivers/net/wireless/8188eu.ko"
 if [ -f "$DRIVER_KO" ]; then
     ok "RTL8188EUS driver already installed for kernel ${KERNEL}"
 else
-    # Install build dependencies
     info "Installing kernel headers and build tools..."
     (apt install -y -qq bc build-essential linux-headers-${KERNEL} 2>/dev/null) &
     spinner $! "Installing build dependencies..."
 
-    # Check headers actually exist
     if [ ! -d "/usr/src/linux-headers-${KERNEL}" ]; then
         err "Kernel headers not found for ${KERNEL} — run: sudo apt install linux-headers-${KERNEL}"
     fi
 
-    # Clone the patched driver
     info "Cloning aircrack-ng rtl8188eus driver..."
     rm -rf /tmp/rtl8188eus
     (git clone -q https://github.com/aircrack-ng/rtl8188eus.git /tmp/rtl8188eus) &
     spinner $! "Cloning rtl8188eus..."
 
-    # Build
     info "Compiling driver (this takes 2-4 minutes on Pi)..."
     cd /tmp/rtl8188eus
     make KSRC=/usr/src/linux-headers-${KERNEL} -j4 > /tmp/8188eu_build.log 2>&1 &
     spinner $! "Compiling 8188eu.ko..."
 
-    # Check build succeeded
     if [ ! -f "/tmp/rtl8188eus/8188eu.ko" ]; then
         err "Driver build failed — check /tmp/8188eu_build.log"
     fi
 
-    # Install
     make install >> /tmp/8188eu_build.log 2>&1
     ok "Driver compiled and installed"
 fi
 
-# Blacklist the broken stock driver
 if [ ! -f /etc/modprobe.d/blacklist-rtl8xxxu.conf ]; then
     echo "blacklist rtl8xxxu" > /etc/modprobe.d/blacklist-rtl8xxxu.conf
     ok "Blacklisted stock rtl8xxxu driver"
@@ -203,7 +208,6 @@ else
     ok "Stock driver already blacklisted"
 fi
 
-# Make it load on boot
 echo "8188eu" > /etc/modules-load.d/8188eu.conf
 depmod -a > /dev/null 2>&1
 ok "8188eu configured to load on boot"
@@ -222,7 +226,6 @@ else
     info "After reboot, run bbinstall again to continue setup"
     sleep 2
     cd /tmp/LCD-show && sudo ./LCD35-show
-    # script reboots Pi here — install.sh will need to be run again
 fi
 
 
@@ -243,13 +246,67 @@ if [ -d "/home/bearbox/bearbox" ]; then
     (cd /home/bearbox/bearbox && git pull -q) &
     spinner $! "Pulling latest from GitHub..."
 else
-    (git clone -q https://github.com/YourUsername/bearbox.git /home/bearbox/bearbox) &
+    (git clone -q https://github.com/BruBread/Bearbox.git /home/bearbox/bearbox) &
     spinner $! "Cloning from GitHub..."
 fi
 chown -R bearbox:bearbox /home/bearbox/bearbox
 ok "Repository ready at /home/bearbox/bearbox"
 
 
+# ── DOOM ─────────────────────────────────────────────────────
+step "Installing Doom (doomgeneric)..."
+divider
+
+if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
+    ok "doomgeneric already compiled"
+else
+    info "Cloning doomgeneric..."
+    rm -rf /home/bearbox/doomgeneric
+    (git clone -q https://github.com/ozkl/doomgeneric.git /home/bearbox/doomgeneric) &
+    spinner $! "Cloning doomgeneric..."
+
+    info "Compiling doomgeneric (framebuffer target)..."
+    (cd /home/bearbox/doomgeneric/doomgeneric && make -j4 2>/dev/null) &
+    spinner $! "Compiling doomgeneric..."
+
+    if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
+        ok "doomgeneric compiled"
+    else
+        echo -e "  ${BRED}✗${NC}  ${RED}doomgeneric build failed — Doom will not work${NC}"
+        info "Try manually: cd ~/doomgeneric/doomgeneric && make"
+    fi
+fi
+
+FREEDOOM_VERSION="0.13.0"
+FREEDOOM_DIR="/home/bearbox/freedoom-${FREEDOOM_VERSION}"
+FREEDOOM_WAD="${FREEDOOM_DIR}/freedoom1.wad"
+
+if [ -f "$FREEDOOM_WAD" ]; then
+    ok "freedoom1.wad already present"
+else
+    info "Downloading Freedoom ${FREEDOOM_VERSION} WAD..."
+    FREEDOOM_URL="https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
+    mkdir -p "$FREEDOOM_DIR"
+    (cd /tmp && \
+        wget -q "$FREEDOOM_URL" -O freedoom.zip && \
+        unzip -q freedoom.zip && \
+        cp freedoom-${FREEDOOM_VERSION}/freedoom1.wad "$FREEDOOM_DIR/" && \
+        rm -rf freedoom.zip freedoom-${FREEDOOM_VERSION}) &
+    spinner $! "Downloading freedoom1.wad..."
+
+    if [ -f "$FREEDOOM_WAD" ]; then
+        ok "freedoom1.wad installed at $FREEDOOM_WAD"
+    else
+        echo -e "  ${BRED}✗${NC}  ${RED}Freedoom download failed — check internet and retry${NC}"
+        info "Manual: wget https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
+    fi
+fi
+
+chown -R bearbox:bearbox /home/bearbox/doomgeneric 2>/dev/null || true
+chown -R bearbox:bearbox "$FREEDOOM_DIR"           2>/dev/null || true
+
+
+# ── SSH ───────────────────────────────────────────────────────
 step "Configuring SSH access..."
 divider
 mkdir -p /home/bearbox/.ssh
@@ -271,13 +328,11 @@ spinner $! "Installing hotswap rules..."
 ok "udev rules installed"
 
 
-# ── PORTAL: allow Flask to bind port 80 without root ──────────
+# ── PORTAL PERMISSIONS ────────────────────────────────────────
 step "Configuring portal permissions..."
 divider
-# Allow python3 to bind to port 80 so the portal runs as bearbox user
 setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3)) 2>/dev/null || \
     info "setcap failed — portal will fall back to sudo for port 80"
-# Allow bearbox to run nmcli and iwlist without password (needed for wifi scan/connect)
 SUDOERS_LINE="bearbox ALL=(ALL) NOPASSWD: /usr/bin/nmcli, /usr/sbin/iwlist, /sbin/iwlist, /usr/bin/iwlist"
 if ! grep -qF "bearbox ALL=(ALL) NOPASSWD" /etc/sudoers.d/bearbox-portal 2>/dev/null; then
     echo "$SUDOERS_LINE" > /etc/sudoers.d/bearbox-portal
@@ -288,7 +343,7 @@ else
 fi
 
 
-# ── PENTEST: passwordless sudo for pentest tools ──────────────
+# ── PENTEST PERMISSIONS ───────────────────────────────────────
 step "Configuring pentest tool permissions..."
 divider
 PENTEST_SUDOERS="/etc/sudoers.d/bearbox-pentest"
@@ -313,12 +368,11 @@ else
 fi
 
 
-# ── PORTAL: enable I2C (for future battery HAT support) ───────
+# ── I2C ───────────────────────────────────────────────────────
 step "Enabling I2C interface..."
 divider
 if ! grep -q "^dtparam=i2c_arm=on" /boot/config.txt 2>/dev/null && \
    ! grep -q "^dtparam=i2c_arm=on" /boot/firmware/config.txt 2>/dev/null; then
-    # Try both paths (Bookworm uses /boot/firmware, older uses /boot)
     CONFIG_PATH="/boot/firmware/config.txt"
     [ -f "$CONFIG_PATH" ] || CONFIG_PATH="/boot/config.txt"
     echo "dtparam=i2c_arm=on" >> "$CONFIG_PATH"
@@ -328,7 +382,7 @@ else
 fi
 
 
-# ── Aliases ───────────────────────────────────────────────────
+# ── ALIASES ───────────────────────────────────────────────────
 step "Setting up shortcuts..."
 divider
 grep -q "bearbox/bashrc_aliases" /home/bearbox/.bashrc || \
@@ -336,7 +390,15 @@ grep -q "bearbox/bashrc_aliases" /home/bearbox/.bashrc || \
 ok "Shortcuts ready"
 
 
-# ── WIFI AUTO-CONNECT ─────────────────────────────────────────
+# ── BBCOMMANDS ────────────────────────────────────────────────
+step "Installing bbcommands..."
+divider
+(bash /home/bearbox/bearbox/bbcommands/install_bbcommands.sh) &
+spinner $! "Installing bb commands to /usr/local/bin..."
+ok "bbcommands installed system-wide"
+
+
+# ── WIFI ─────────────────────────────────────────────────────
 step "Configuring WiFi auto-connect..."
 divider
 if [ -f /home/bearbox/bearbox/config.json ]; then
@@ -361,6 +423,7 @@ else
 fi
 
 
+# ── LOOT DIR ─────────────────────────────────────────────────
 step "Creating loot directory..."
 divider
 mkdir -p /home/bearbox/loot
@@ -369,6 +432,7 @@ chmod 755 /home/bearbox/loot
 ok "Loot directory ready at /home/bearbox/loot"
 
 
+# ── SERVICE ───────────────────────────────────────────────────
 step "Installing BearBox service..."
 divider
 (cp /home/bearbox/bearbox/services/bearbox.service /etc/systemd/system/ && \
@@ -378,6 +442,7 @@ spinner $! "Enabling BearBox autostart..."
 ok "BearBox will start on boot"
 
 
+# ── DONE ─────────────────────────────────────────────────────
 echo ""
 echo -e "${BGRN}"
 echo '  ██████╗  ██████╗ ███╗   ██╗███████╗██╗'
@@ -392,8 +457,10 @@ echo -e "  ${BGRN}BearBox is installed and ready!${NC}"
 echo ""
 echo -e "  ${CYN}Plug in your devices to get started:${NC}"
 echo -e "  ${DIM}⚡ TL-WN722N   →  Pentest mode loads automatically${NC}"
-echo -e "  ${DIM}🎮 USB Drive   →  Game launcher loads automatically${NC}"
+echo -e "  ${DIM}🎮 USB Drive   →  Doom launches automatically${NC}"
 echo -e "  ${DIM}🦆 Rubber Ducky → Ducky scripts load automatically${NC}"
+echo -e "  ${DIM}📷 USB Camera  →  Surveillance mode loads automatically${NC}"
+echo -e "  ${DIM}⌨  USB Keyboard → LCD terminal loads automatically${NC}"
 echo ""
 echo -e "  ${CYN}SSH from your PC (no password):${NC}"
 echo -e "  ${DIM}ssh bearbox@bearbox.local${NC}"
@@ -401,8 +468,11 @@ echo ""
 echo -e "  ${CYN}When offline, connect to BearBox-AP and visit:${NC}"
 echo -e "  ${DIM}http://bearbox.local${NC}"
 echo ""
+echo -e "  ${CYN}Launch Doom manually:${NC}"
+echo -e "  ${DIM}bbdoom${NC}"
+echo ""
 echo -e "  ${CYN}Update BearBox anytime:${NC}"
-echo -e "  ${DIM}cd ~/bearbox && git pull${NC}"
+echo -e "  ${DIM}bbupdate${NC}"
 divider
 echo ""
 read -p "$(echo -e "  ${BWHT}Reboot now to apply all changes? (y/n):${NC} ")" reboot_confirm
