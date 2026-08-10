@@ -51,6 +51,8 @@ KEYMAP = {
 # Special keycodes
 KEY_BACKSPACE = 14
 KEY_ENTER     = 28
+KEY_KPENTER   = 96   # some keyboards (e.g. SiGma Micro TRACER) report their
+                      # main Enter key with this code instead of KEY_ENTER
 KEY_TAB       = 15
 KEY_ESC       = 1
 KEY_UP        = 103
@@ -310,6 +312,7 @@ class KeyboardReader:
                 21: "CTRL_Y",
                 44: "CTRL_Z",
                 28: "CTRL_M",
+                96: "CTRL_M",
                 14: "CTRL_H",
                 36: "CTRL_J",
                 37: "CTRL_K",
@@ -322,6 +325,7 @@ class KeyboardReader:
         special = {
             KEY_BACKSPACE: "BACKSPACE",
             KEY_ENTER:     "ENTER",
+            KEY_KPENTER:   "ENTER",
             KEY_TAB:       "TAB",
             KEY_ESC:       "ESC",
             KEY_UP:        "UP",
