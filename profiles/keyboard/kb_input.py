@@ -78,7 +78,7 @@ MODIFIER_KEYS = SHIFT_KEYS | CTRL_KEYS | {KEY_CAPSLOCK}
 
 def find_keyboard_device():
     """
-    Find the first non-touchscreen USB keyboard event device.
+    Find a USB keyboard event device, skipping the touchscreen.
     Parses /proc/bus/input/devices properly — no fragile name matching.
     Uses the same EV_KEY bitmask logic as profile_manager.detect_keyboard().
     """
@@ -91,13 +91,19 @@ def find_keyboard_device():
     # Split on blank lines, drop empty chunks
     blocks = [b.strip() for b in content.split("\n\n") if b.strip()]
 
+    candidates = []  # (has_leds, path) across every EV_KEY block found
+
     for block in blocks:
         lines    = block.split("\n")
         ev_val   = None
         handlers = []
+        name     = ""
 
         for line in lines:
             line = line.strip()
+
+            if line.startswith("N: Name="):
+                name = line.split("=", 1)[1].strip('"')
 
             if line.startswith("B: EV="):
                 try:
@@ -112,21 +118,36 @@ def find_keyboard_device():
         if ev_val is None or not (ev_val & (1 << 1)):
             continue
 
-        # Find event nodes, skip event0 (touchscreen)
-        event_nodes = [
-            h for h in handlers
-            if h.startswith("event") and h != "event0"
-        ]
+        # Touchscreens report EV_KEY too (for BTN_TOUCH), so identify them
+        # by name rather than by assuming they always land on event0 — the
+        # event number a device gets depends on enumeration order, which
+        # reshuffles across reboots/USB replugs.
+        if "touchscreen" in name.lower():
+            continue
+
+        event_nodes = [h for h in handlers if h.startswith("event")]
         if not event_nodes:
             continue
 
         path = f"/dev/input/{event_nodes[0]}"
-        if os.path.exists(path):
-            print(f"[keyboard] found device: {path}")
-            return path
+        if not os.path.exists(path):
+            continue
 
-    print("[keyboard] no keyboard device found in /proc/bus/input/devices")
-    return None
+        # A composite keyboard exposes separate interfaces for its main
+        # keys vs. consumer-control (media keys) vs. system-control (power)
+        # buttons — only the main interface drives LEDs (caps/num lock), so
+        # prefer it over a sibling interface that also happens to report
+        # EV_KEY but never sends a plain Enter/letter keycode.
+        candidates.append(("leds" in handlers, path))
+
+    if not candidates:
+        print("[keyboard] no keyboard device found in /proc/bus/input/devices")
+        return None
+
+    candidates.sort(key=lambda c: not c[0])  # LED-capable interface first
+    path = candidates[0][1]
+    print(f"[keyboard] found device: {path}")
+    return path
 
 
 def _has_ev_key(block):
