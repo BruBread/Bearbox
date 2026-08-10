@@ -20,6 +20,7 @@ sys.path.insert(0, BASE)
 def run():
     from profiles.icpep_keyboard.screen_icpep_intro import run as play_intro
     from profiles.icpep_keyboard import icpep_eyes as eyes
+    from profiles.icpep_keyboard import cloud_bump
     from profiles.keyboard.kb_input import KeyboardReader
 
     play_intro()
@@ -33,6 +34,7 @@ def run():
         while key is not None:
             if key == "ENTER":
                 eyes.anger_up()
+                cloud_bump.bump()
             key = kb.get_char()
 
         eyes.draw()
