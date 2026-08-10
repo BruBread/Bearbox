@@ -54,8 +54,13 @@ def is_connected():
     return False
 
 def has_internet():
-    r = subprocess.run("ping -c 1 -W 2 8.8.8.8", shell=True, capture_output=True)
-    return r.returncode == 0
+    # Try a couple targets — a single dropped packet or one blocked host
+    # shouldn't read as "no internet".
+    for target in ("8.8.8.8", "1.1.1.1"):
+        r = subprocess.run(f"ping -c 1 -W 2 {target}", shell=True, capture_output=True)
+        if r.returncode == 0:
+            return True
+    return False
 
 def sync_time():
     run_cmd("sudo ntpdate -u pool.ntp.org 2>/dev/null || sudo chronyc makestep 2>/dev/null")

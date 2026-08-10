@@ -54,7 +54,8 @@ def _save_time_loop():
         time.sleep(SAVE_EVERY)
 
 # ── internet check ────────────────────────────────────────────
-CHECK_EVERY = 30  # seconds between periodic internet checks
+CHECK_EVERY    = 30  # seconds between periodic internet checks
+FAIL_THRESHOLD = 2   # consecutive failed checks before actually going offline
 
 def _is_connected():
     from network.net_utils import is_connected
@@ -129,6 +130,7 @@ def run():
 
     current    = 0
     last_check = time.time()
+    fail_count = 0
 
     print(f"BearBox idle — tap to cycle | screen: {SCREENS[current][0]}")
 
@@ -151,18 +153,23 @@ def run():
             last_check = time.time()
             from network.net_utils import has_internet
             if not has_internet():
-                print(">> Internet lost — going offline")
-                from screen_disconnected import run as play_disconnected
-                play_disconnected()
-                # Hand off to offline mode via subprocess so we don't grow
-                # the call stack on every reconnect/disconnect cycle.
-                os.execv(
-                    sys.executable,
-                    [sys.executable,
-                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_offline.py")]
-                )
-                # execv replaces this process — code below never runs
-                return
+                fail_count += 1
+                print(f">> Internet check failed ({fail_count}/{FAIL_THRESHOLD})")
+                if fail_count >= FAIL_THRESHOLD:
+                    print(">> Internet lost — going offline")
+                    from screen_disconnected import run as play_disconnected
+                    play_disconnected()
+                    # Hand off to offline mode via subprocess so we don't grow
+                    # the call stack on every reconnect/disconnect cycle.
+                    os.execv(
+                        sys.executable,
+                        [sys.executable,
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)), "idle_offline.py")]
+                    )
+                    # execv replaces this process — code below never runs
+                    return
+            else:
+                fail_count = 0
 
         time.sleep(1 / 30)
 
