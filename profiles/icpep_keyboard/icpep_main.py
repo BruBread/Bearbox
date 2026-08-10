@@ -29,12 +29,24 @@ def run():
     if not kb.start():
         print("[icpep] no keyboard device found — eyes will idle only")
 
+    # kb_input.py queues "ENTER" for both the initial press AND every OS-level
+    # key-repeat event while the button stays held — fine for the terminal
+    # profile (repeat is wanted there for held backspace/arrows), but here it
+    # means a held or bouncy button fires anger_up()/cloud_bump.bump() once
+    # per repeat tick instead of once per real press. Cooldown matches the
+    # one counter/script.js already uses for the same reason on the browser side.
+    COOLDOWN_S = 0.35
+    last_press = 0.0
+
     while True:
         key = kb.get_char()
         while key is not None:
             if key == "ENTER":
-                eyes.anger_up()
-                cloud_bump.bump()
+                now = time.time()
+                if now - last_press >= COOLDOWN_S:
+                    last_press = now
+                    eyes.anger_up()
+                    cloud_bump.bump()
             key = kb.get_char()
 
         eyes.draw()
