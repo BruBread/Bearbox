@@ -7,6 +7,7 @@ Device → Profile:
   TL-WN722N (any)         → pentest  (RECON or SIPHON decided internally)
   USB Drive               → games
   Rubber Ducky            → rubberducky
+  SiGma Micro TRACER kb   → icpep_keyboard  (1c4f:0002 — checked before generic keyboard)
   USB Keyboard            → keyboard
   Nothing                 → idle
 
@@ -29,7 +30,8 @@ PYTHONPATH = f"{BASE}/core:{BASE}:/home/bearbox/.local/lib/python3.13/site-packa
 PROFILES = {
     "2357:010c": "pentest",
     "03eb:2042": "rubberducky",
-    "4c4a:4a55": "camera"
+    "4c4a:4a55": "camera",
+    "1c4f:0002": "icpep_keyboard",
 }
 
 def run(cmd):
@@ -112,13 +114,14 @@ def launch_idle():
 
 def launch_profile(profile: str):
     profile_map = {
-        "pentest":     f"{BASE}/profiles/pentest/launch.sh",
-        "ap":          f"{BASE}/profiles/wifi/ap/ap_main.py",
-        "games":       f"{BASE}/profiles/games/launcher.py",
-        "bluetooth":   f"{BASE}/profiles/bluetooth/ui.py",
-        "rubberducky": f"{BASE}/profiles/rubberducky/ui.py",
-        "keyboard":    f"{BASE}/profiles/keyboard/kb_ui.py",
-        "camera":      f"{BASE}/profiles/camera/camera_main.py",
+        "pentest":        f"{BASE}/profiles/pentest/launch.sh",
+        "ap":             f"{BASE}/profiles/wifi/ap/ap_main.py",
+        "games":          f"{BASE}/profiles/games/launcher.py",
+        "bluetooth":      f"{BASE}/profiles/bluetooth/ui.py",
+        "rubberducky":    f"{BASE}/profiles/rubberducky/ui.py",
+        "keyboard":       f"{BASE}/profiles/keyboard/kb_ui.py",
+        "camera":         f"{BASE}/profiles/camera/camera_main.py",
+        "icpep_keyboard": f"{BASE}/profiles/icpep_keyboard/icpep_main.py",
     }
     script = profile_map.get(profile)
     if not script:

@@ -171,46 +171,64 @@ info "The stock kernel driver does not support monitor mode"
 
 KERNEL=$(uname -r)
 DRIVER_KO="/lib/modules/${KERNEL}/kernel/drivers/net/wireless/8188eu.ko"
+DRIVER_BUILT=0
 
 if [ -f "$DRIVER_KO" ]; then
     ok "RTL8188EUS driver already installed for kernel ${KERNEL}"
+    DRIVER_BUILT=1
 else
     info "Installing kernel headers and build tools..."
     (apt install -y -qq bc build-essential linux-headers-${KERNEL} 2>/dev/null) &
     spinner $! "Installing build dependencies..."
 
     if [ ! -d "/usr/src/linux-headers-${KERNEL}" ]; then
-        err "Kernel headers not found for ${KERNEL} — run: sudo apt install linux-headers-${KERNEL}"
+        echo -e "  ${BRED}✗${NC}  ${RED}Kernel headers not found for ${KERNEL} — skipping pentest adapter driver${NC}"
+        info "TL-WN722N monitor mode won't work, but setup will continue"
+    else
+        info "Cloning aircrack-ng rtl8188eus driver..."
+        rm -rf /tmp/rtl8188eus
+        (git clone -q https://github.com/aircrack-ng/rtl8188eus.git /tmp/rtl8188eus) &
+        spinner $! "Cloning rtl8188eus..."
+
+        # Compat fixes for kbuild/timer API changes on newer kernels:
+        # EXTRA_CFLAGS is no longer wired into ccflags-y, and from_timer/
+        # del_timer_sync were renamed to timer_container_of/timer_delete_sync.
+        sed -i 's/EXTRA_CFLAGS/ccflags-y/g' /tmp/rtl8188eus/Makefile
+        sed -i '/static inline void timer_hdl(struct timer_list \*in_timer)/i\
+#ifdef timer_container_of\
+#define from_timer(var, callback_timer, timer_fieldname) timer_container_of(var, callback_timer, timer_fieldname)\
+#define del_timer_sync(t) timer_delete_sync(t)\
+#endif' /tmp/rtl8188eus/include/osdep_service_linux.h
+
+        info "Compiling driver (this takes 2-4 minutes on Pi)..."
+        cd /tmp/rtl8188eus
+        make KSRC=/usr/src/linux-headers-${KERNEL} -j4 > /tmp/8188eu_build.log 2>&1 &
+        spinner $! "Compiling 8188eu.ko..."
+
+        if [ -f "/tmp/rtl8188eus/8188eu.ko" ]; then
+            make install >> /tmp/8188eu_build.log 2>&1
+            ok "Driver compiled and installed"
+            DRIVER_BUILT=1
+        else
+            echo -e "  ${BRED}✗${NC}  ${RED}Driver build failed — check /tmp/8188eu_build.log${NC}"
+            info "TL-WN722N monitor mode won't work, but setup will continue"
+        fi
+        cd /home/bearbox
     fi
-
-    info "Cloning aircrack-ng rtl8188eus driver..."
-    rm -rf /tmp/rtl8188eus
-    (git clone -q https://github.com/aircrack-ng/rtl8188eus.git /tmp/rtl8188eus) &
-    spinner $! "Cloning rtl8188eus..."
-
-    info "Compiling driver (this takes 2-4 minutes on Pi)..."
-    cd /tmp/rtl8188eus
-    make KSRC=/usr/src/linux-headers-${KERNEL} -j4 > /tmp/8188eu_build.log 2>&1 &
-    spinner $! "Compiling 8188eu.ko..."
-
-    if [ ! -f "/tmp/rtl8188eus/8188eu.ko" ]; then
-        err "Driver build failed — check /tmp/8188eu_build.log"
-    fi
-
-    make install >> /tmp/8188eu_build.log 2>&1
-    ok "Driver compiled and installed"
 fi
 
-if [ ! -f /etc/modprobe.d/blacklist-rtl8xxxu.conf ]; then
-    echo "blacklist rtl8xxxu" > /etc/modprobe.d/blacklist-rtl8xxxu.conf
-    ok "Blacklisted stock rtl8xxxu driver"
-else
-    ok "Stock driver already blacklisted"
-fi
+if [ "$DRIVER_BUILT" = "1" ]; then
+    if [ ! -f /etc/modprobe.d/blacklist-rtl8xxxu.conf ]; then
+        echo "blacklist rtl8xxxu" > /etc/modprobe.d/blacklist-rtl8xxxu.conf
+        ok "Blacklisted stock rtl8xxxu driver"
+    else
+        ok "Stock driver already blacklisted"
+    fi
 
-echo "8188eu" > /etc/modules-load.d/8188eu.conf
-depmod -a > /dev/null 2>&1
-ok "8188eu configured to load on boot"
+    echo "8188eu" > /etc/modules-load.d/8188eu.conf
+    depmod -a > /dev/null 2>&1
+    ok "8188eu configured to load on boot"
+fi
 
 cd /home/bearbox
 step "Checking LCD driver..."
@@ -223,20 +241,11 @@ else
     spinner $! "Cloning LCD-show..."
     chmod +x /tmp/LCD-show/LCD35-show
     info "Installing LCD35 driver — Pi will reboot automatically"
-    info "After reboot, run bbinstall again to continue setup"
+    info "After reboot, run: sudo bash ~/bearbox/install.sh"
+    info "(bbinstall isn't set up yet this early in a fresh install)"
     sleep 2
     cd /tmp/LCD-show && sudo ./LCD35-show
 fi
-
-
-# ── FONTS ─────────────────────────────────────────────────────
-step "Installing custom fonts..."
-divider
-mkdir -p /home/bearbox/.fonts
-cp /home/bearbox/bearbox/fonts/*.ttf /home/bearbox/.fonts/ 2>/dev/null || true
-fc-cache -fv /home/bearbox/.fonts > /dev/null 2>&1 &
-spinner $! "Loading fonts..."
-ok "Fonts ready"
 
 
 step "Cloning BearBox repository..."
@@ -251,6 +260,16 @@ else
 fi
 chown -R bearbox:bearbox /home/bearbox/bearbox
 ok "Repository ready at /home/bearbox/bearbox"
+
+
+# ── FONTS ─────────────────────────────────────────────────────
+step "Installing custom fonts..."
+divider
+mkdir -p /home/bearbox/.fonts
+cp /home/bearbox/bearbox/fonts/*.ttf /home/bearbox/.fonts/ 2>/dev/null || true
+fc-cache -fv /home/bearbox/.fonts > /dev/null 2>&1 &
+spinner $! "Loading fonts..."
+ok "Fonts ready"
 
 
 # ── DOOM ─────────────────────────────────────────────────────
