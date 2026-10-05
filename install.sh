@@ -62,16 +62,9 @@ echo '  ██╔══██╗██╔══╝  ██╔══██║█�
 echo '  ██████╔╝███████╗██║  ██║██║  ██║██████╔╝╚██████╔╝██╔╝ ██╗'
 echo '  ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝'
 echo -e "${NC}"
-echo -e "  ${DIM}Hot-swappable Pi Computer — by Bearbruh${NC}"
-echo -e "  ${DIM}github.com/BruBread/bearbox${NC}"
+echo -e "  ${DIM}NEXUS build — live ticket-sales display${NC}"
+echo -e "  ${DIM}github.com/BruBread/Bearbox (nexus branch)${NC}"
 echo ""
-divider
-echo -e "  ${BYLW}Profiles:${NC}"
-echo -e "  ${CYN}⚡${NC} TL-WN722N    →  ${BGRN}Pentest Mode${NC}"
-echo -e "  ${CYN}🎮${NC} USB Drive    →  ${BGRN}Game Launcher (Doom)${NC}"
-echo -e "  ${CYN}🦆${NC} Rubber Ducky →  ${BGRN}Ducky Scripts${NC}"
-echo -e "  ${CYN}📷${NC} USB Camera   →  ${BGRN}Surveillance + AI${NC}"
-echo -e "  ${CYN}⌨${NC}  USB Keyboard →  ${BGRN}LCD Terminal${NC}"
 divider
 echo ""
 
@@ -104,39 +97,10 @@ step "Installing dependencies..."
 divider
 PACKAGES=(
     git
-    python3-pygame
-    python3-psutil
-    fonts-dejavu
-    aircrack-ng
-    libts-dev
-    evtest
     python3-pip
-    udev
+    fonts-dejavu
     network-manager
-    macchanger
     ntpdate
-    hostapd
-    dnsmasq
-    python3-flask
-    python3-smbus
-    i2c-tools
-    bettercap
-    nmap
-    nikto
-    gobuster
-    hcxdumptool
-    # Doom dependencies
-    build-essential
-    libsdl2-dev
-    libsdl2-mixer-dev
-    libsdl2-image-dev
-    libsdl2-net-dev
-    # Camera dependencies
-    python3-opencv
-    libopencv-dev
-    # GPIO (for icpep.py LEDs)
-    python3-lgpio
-    lgpio
 )
 for pkg in "${PACKAGES[@]}"; do
     [[ "$pkg" == \#* ]] && continue
@@ -162,73 +126,6 @@ done
 ok "Python packages installed"
 
 
-# ── RTL8188EUS WIFI ADAPTER DRIVER ───────────────────────────
-step "Installing RTL8188EUS monitor mode driver..."
-divider
-info "This is required for the TL-WN722N v2/v3 (pentest adapter)"
-info "The stock kernel driver does not support monitor mode"
-
-KERNEL=$(uname -r)
-DRIVER_KO="/lib/modules/${KERNEL}/kernel/drivers/net/wireless/8188eu.ko"
-DRIVER_BUILT=0
-
-if [ -f "$DRIVER_KO" ]; then
-    ok "RTL8188EUS driver already installed for kernel ${KERNEL}"
-    DRIVER_BUILT=1
-else
-    info "Installing kernel headers and build tools..."
-    (apt install -y -qq bc build-essential linux-headers-${KERNEL} 2>/dev/null) &
-    spinner $! "Installing build dependencies..."
-
-    if [ ! -d "/usr/src/linux-headers-${KERNEL}" ]; then
-        echo -e "  ${BRED}✗${NC}  ${RED}Kernel headers not found for ${KERNEL} — skipping pentest adapter driver${NC}"
-        info "TL-WN722N monitor mode won't work, but setup will continue"
-    else
-        info "Cloning aircrack-ng rtl8188eus driver..."
-        rm -rf /tmp/rtl8188eus
-        (git clone -q https://github.com/aircrack-ng/rtl8188eus.git /tmp/rtl8188eus) &
-        spinner $! "Cloning rtl8188eus..."
-
-        # Compat fixes for kbuild/timer API changes on newer kernels:
-        # EXTRA_CFLAGS is no longer wired into ccflags-y, and from_timer/
-        # del_timer_sync were renamed to timer_container_of/timer_delete_sync.
-        sed -i 's/EXTRA_CFLAGS/ccflags-y/g' /tmp/rtl8188eus/Makefile
-        sed -i '/static inline void timer_hdl(struct timer_list \*in_timer)/i\
-#ifdef timer_container_of\
-#define from_timer(var, callback_timer, timer_fieldname) timer_container_of(var, callback_timer, timer_fieldname)\
-#define del_timer_sync(t) timer_delete_sync(t)\
-#endif' /tmp/rtl8188eus/include/osdep_service_linux.h
-
-        info "Compiling driver (this takes 2-4 minutes on Pi)..."
-        cd /tmp/rtl8188eus
-        make KSRC=/usr/src/linux-headers-${KERNEL} -j4 > /tmp/8188eu_build.log 2>&1 &
-        spinner $! "Compiling 8188eu.ko..."
-
-        if [ -f "/tmp/rtl8188eus/8188eu.ko" ]; then
-            make install >> /tmp/8188eu_build.log 2>&1
-            ok "Driver compiled and installed"
-            DRIVER_BUILT=1
-        else
-            echo -e "  ${BRED}✗${NC}  ${RED}Driver build failed — check /tmp/8188eu_build.log${NC}"
-            info "TL-WN722N monitor mode won't work, but setup will continue"
-        fi
-        cd /home/bearbox
-    fi
-fi
-
-if [ "$DRIVER_BUILT" = "1" ]; then
-    if [ ! -f /etc/modprobe.d/blacklist-rtl8xxxu.conf ]; then
-        echo "blacklist rtl8xxxu" > /etc/modprobe.d/blacklist-rtl8xxxu.conf
-        ok "Blacklisted stock rtl8xxxu driver"
-    else
-        ok "Stock driver already blacklisted"
-    fi
-
-    echo "8188eu" > /etc/modules-load.d/8188eu.conf
-    depmod -a > /dev/null 2>&1
-    ok "8188eu configured to load on boot"
-fi
-
 cd /home/bearbox
 step "Checking LCD driver..."
 divider
@@ -250,15 +147,15 @@ fi
 step "Cloning BearBox repository..."
 divider
 if [ -d "/home/bearbox/bearbox" ]; then
-    info "Repo already exists — pulling latest..."
-    (cd /home/bearbox/bearbox && git pull -q) &
-    spinner $! "Pulling latest from GitHub..."
+    info "Repo already exists — fetching the nexus branch..."
+    (cd /home/bearbox/bearbox && git fetch -q origin && git checkout -f -B nexus origin/nexus) &
+    spinner $! "Updating to the nexus branch..."
 else
-    (git clone -q https://github.com/BruBread/Bearbox.git /home/bearbox/bearbox) &
-    spinner $! "Cloning from GitHub..."
+    (git clone -q -b nexus https://github.com/BruBread/Bearbox.git /home/bearbox/bearbox) &
+    spinner $! "Cloning the nexus branch from GitHub..."
 fi
 chown -R bearbox:bearbox /home/bearbox/bearbox
-ok "Repository ready at /home/bearbox/bearbox"
+ok "Repository ready at /home/bearbox/bearbox (nexus branch)"
 
 
 # ── FONTS ─────────────────────────────────────────────────────
@@ -269,59 +166,6 @@ cp /home/bearbox/bearbox/fonts/*.ttf /home/bearbox/.fonts/ 2>/dev/null || true
 fc-cache -fv /home/bearbox/.fonts > /dev/null 2>&1 &
 spinner $! "Loading fonts..."
 ok "Fonts ready"
-
-
-# ── DOOM ─────────────────────────────────────────────────────
-step "Installing Doom (doomgeneric)..."
-divider
-
-if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
-    ok "doomgeneric already compiled"
-else
-    info "Cloning doomgeneric..."
-    rm -rf /home/bearbox/doomgeneric
-    (git clone -q https://github.com/ozkl/doomgeneric.git /home/bearbox/doomgeneric) &
-    spinner $! "Cloning doomgeneric..."
-
-    info "Compiling doomgeneric (framebuffer target)..."
-    (cd /home/bearbox/doomgeneric/doomgeneric && make -j4 2>/dev/null) &
-    spinner $! "Compiling doomgeneric..."
-
-    if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
-        ok "doomgeneric compiled"
-    else
-        echo -e "  ${BRED}✗${NC}  ${RED}doomgeneric build failed — Doom will not work${NC}"
-        info "Try manually: cd ~/doomgeneric/doomgeneric && make"
-    fi
-fi
-
-FREEDOOM_VERSION="0.13.0"
-FREEDOOM_DIR="/home/bearbox/freedoom-${FREEDOOM_VERSION}"
-FREEDOOM_WAD="${FREEDOOM_DIR}/freedoom1.wad"
-
-if [ -f "$FREEDOOM_WAD" ]; then
-    ok "freedoom1.wad already present"
-else
-    info "Downloading Freedoom ${FREEDOOM_VERSION} WAD..."
-    FREEDOOM_URL="https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
-    mkdir -p "$FREEDOOM_DIR"
-    (cd /tmp && \
-        wget -q "$FREEDOOM_URL" -O freedoom.zip && \
-        unzip -q freedoom.zip && \
-        cp freedoom-${FREEDOOM_VERSION}/freedoom1.wad "$FREEDOOM_DIR/" && \
-        rm -rf freedoom.zip freedoom-${FREEDOOM_VERSION}) &
-    spinner $! "Downloading freedoom1.wad..."
-
-    if [ -f "$FREEDOOM_WAD" ]; then
-        ok "freedoom1.wad installed at $FREEDOOM_WAD"
-    else
-        echo -e "  ${BRED}✗${NC}  ${RED}Freedoom download failed — check internet and retry${NC}"
-        info "Manual: wget https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
-    fi
-fi
-
-chown -R bearbox:bearbox /home/bearbox/doomgeneric 2>/dev/null || true
-chown -R bearbox:bearbox "$FREEDOOM_DIR"           2>/dev/null || true
 
 
 # ── SSH ───────────────────────────────────────────────────────
@@ -335,69 +179,6 @@ chmod 700 /home/bearbox/.ssh
 chmod 600 /home/bearbox/.ssh/authorized_keys
 chown -R bearbox:bearbox /home/bearbox/.ssh
 ok "SSH key configured — no password needed from your PC"
-
-
-step "Installing udev rules..."
-divider
-(cp /home/bearbox/bearbox/udev/99-bearbox.rules /etc/udev/rules.d/ && \
-    udevadm control --reload-rules && \
-    udevadm trigger) &
-spinner $! "Installing hotswap rules..."
-ok "udev rules installed"
-
-
-# ── PORTAL PERMISSIONS ────────────────────────────────────────
-step "Configuring portal permissions..."
-divider
-setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3)) 2>/dev/null || \
-    info "setcap failed — portal will fall back to sudo for port 80"
-SUDOERS_LINE="bearbox ALL=(ALL) NOPASSWD: /usr/bin/nmcli, /usr/sbin/iwlist, /sbin/iwlist, /usr/bin/iwlist"
-if ! grep -qF "bearbox ALL=(ALL) NOPASSWD" /etc/sudoers.d/bearbox-portal 2>/dev/null; then
-    echo "$SUDOERS_LINE" > /etc/sudoers.d/bearbox-portal
-    chmod 440 /etc/sudoers.d/bearbox-portal
-    ok "Portal sudoers rule installed"
-else
-    ok "Portal sudoers rule already present"
-fi
-
-
-# ── PENTEST PERMISSIONS ───────────────────────────────────────
-step "Configuring pentest tool permissions..."
-divider
-PENTEST_SUDOERS="/etc/sudoers.d/bearbox-pentest"
-PENTEST_RULES="bearbox ALL=(ALL) NOPASSWD: \
-/usr/bin/bettercap, \
-/usr/bin/nmap, \
-/usr/sbin/airmon-ng, \
-/usr/bin/hcxdumptool, \
-/usr/sbin/ip, \
-/usr/bin/ip, \
-/sbin/ip, \
-/usr/sbin/iw, \
-/usr/bin/iw, \
-/sbin/iptables, \
-/usr/sbin/iptables"
-if ! [ -f "$PENTEST_SUDOERS" ]; then
-    echo "$PENTEST_RULES" > "$PENTEST_SUDOERS"
-    chmod 440 "$PENTEST_SUDOERS"
-    ok "Pentest sudoers rules installed"
-else
-    ok "Pentest sudoers rules already present"
-fi
-
-
-# ── I2C ───────────────────────────────────────────────────────
-step "Enabling I2C interface..."
-divider
-if ! grep -q "^dtparam=i2c_arm=on" /boot/config.txt 2>/dev/null && \
-   ! grep -q "^dtparam=i2c_arm=on" /boot/firmware/config.txt 2>/dev/null; then
-    CONFIG_PATH="/boot/firmware/config.txt"
-    [ -f "$CONFIG_PATH" ] || CONFIG_PATH="/boot/config.txt"
-    echo "dtparam=i2c_arm=on" >> "$CONFIG_PATH"
-    ok "I2C enabled in $CONFIG_PATH"
-else
-    ok "I2C already enabled"
-fi
 
 
 # ── ALIASES ───────────────────────────────────────────────────
@@ -417,37 +198,7 @@ ok "bbcommands installed system-wide"
 
 
 # ── WIFI ─────────────────────────────────────────────────────
-step "Configuring WiFi auto-connect..."
-divider
-if [ -f /home/bearbox/bearbox/config.json ]; then
-    SSID=$(python3 -c "import json; c=json.load(open('/home/bearbox/bearbox/config.json')); print(c['hotspot_ssid'])")
-    PSK=$(python3 -c "import json; c=json.load(open('/home/bearbox/bearbox/config.json')); print(c['hotspot_password'])")
-    if ! grep -q "$SSID" /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null; then
-        cat >> /etc/wpa_supplicant/wpa_supplicant.conf << EOF
-
-network={
-    ssid="$SSID"
-    psk="$PSK"
-    priority=10
-}
-EOF
-        ok "WiFi auto-connect configured for $SSID"
-    else
-        ok "WiFi already configured for $SSID"
-    fi
-else
-    info "No config.json found — skipping WiFi setup"
-    info "Create config.json and re-run install.sh"
-fi
-
-
-# ── LOOT DIR ─────────────────────────────────────────────────
-step "Creating loot directory..."
-divider
-mkdir -p /home/bearbox/loot
-chown -R bearbox:bearbox /home/bearbox/loot
-chmod 755 /home/bearbox/loot
-ok "Loot directory ready at /home/bearbox/loot"
+info "Booth Wi-Fi (NexusV, walawifi) is joined at runtime by nexus.py — nothing to configure here."
 
 
 # ── SERVICE ───────────────────────────────────────────────────
@@ -471,26 +222,16 @@ echo '  ██████╔╝╚██████╔╝██║ ╚██�
 echo '  ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚══════╝╚═╝'
 echo -e "${NC}"
 divider
-echo -e "  ${BGRN}BearBox is installed and ready!${NC}"
+echo -e "  ${BGRN}BearBox NEXUS is installed and ready!${NC}"
 echo ""
-echo -e "  ${CYN}Plug in your devices to get started:${NC}"
-echo -e "  ${DIM}⚡ TL-WN722N   →  Pentest mode loads automatically${NC}"
-echo -e "  ${DIM}🎮 USB Drive   →  Doom launches automatically${NC}"
-echo -e "  ${DIM}🦆 Rubber Ducky → Ducky scripts load automatically${NC}"
-echo -e "  ${DIM}📷 USB Camera  →  Surveillance mode loads automatically${NC}"
-echo -e "  ${DIM}⌨  USB Keyboard → LCD terminal loads automatically${NC}"
+echo -e "  ${CYN}On boot it joins the booth Wi-Fi, finds the hub, and shows${NC}"
+echo -e "  ${CYN}live ticket sales. Tap the screen to toggle the robot eyes.${NC}"
 echo ""
 echo -e "  ${CYN}SSH from your PC (no password):${NC}"
 echo -e "  ${DIM}ssh bearbox@bearbox.local${NC}"
 echo ""
-echo -e "  ${CYN}When offline, connect to BearBox-AP and visit:${NC}"
-echo -e "  ${DIM}http://bearbox.local${NC}"
-echo ""
-echo -e "  ${CYN}Launch Doom manually:${NC}"
-echo -e "  ${DIM}bbdoom${NC}"
-echo ""
-echo -e "  ${CYN}Update BearBox anytime:${NC}"
-echo -e "  ${DIM}bbupdate${NC}"
+echo -e "  ${CYN}Update anytime (after pushing to the nexus branch):${NC}"
+echo -e "  ${DIM}bbnexus${NC}"
 divider
 echo ""
 read -p "$(echo -e "  ${BWHT}Reboot now to apply all changes? (y/n):${NC} ")" reboot_confirm
