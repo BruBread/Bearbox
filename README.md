@@ -1,89 +1,52 @@
-# Bearbox
+# Bearbox — NEXUS build
 
-Plug in a USB device, it does something. Unplug it, goes back to idle. That's it.
+A Raspberry Pi with a small LCD that shows the **NEXUS** booth's live ticket
+sales. That's all it does. No USB profiles, no pentest, no Doom — this branch is
+stripped down to one job so nothing can interfere with it.
 
-Runs on a Raspberry Pi with a small touchscreen. Everything is Python, display draws straight to the framebuffer. No X11, no desktop.
+Runs on the framebuffer (no X11). Everything is Python.
 
-## Quick Start
+## What it shows
+
+- **Tickets** — `SOLD n / TICKETS`, read live from the booth's signup PC.
+- **Eyes** — the cyan robot eyes. Tap the screen to toggle between the two.
+- **Red clock** — the disconnect screen. Shown whenever there's no live ticket
+  data (no Wi-Fi, no hub, or the signup server is down).
+
+## How it finds the numbers
+
+1. Connects to the booth Wi-Fi: `NexusV`, then `walawifi`.
+2. Scans the local `/24` for the NEXUS hub (`:3000/ping` → `nexus-hub`).
+3. Says hello to the hub as `bearbox`, so the GM panel's **BEARBOX** light goes
+   green. The hub replies with the signup PC's address.
+4. Polls `http://<signup>:4000/api/state` for the ticket count.
+
+## Update
+
+```
+# on your machine: push to the nexus branch
+git push origin nexus
+
+# on the Pi
+bbnexus        # fetch + checkout -f nexus + restart
+```
+
+First time, when the Pi is still on `main`:
 
 ```bash
-git clone https://github.com/BruBread/Bearbox
-cd Bearbox
-sudo bash install.sh
+cd ~/bearbox
+git fetch origin
+git checkout -f -B nexus origin/nexus
+sudo bash bbcommands/install_bbcommands.sh
+sudo systemctl restart bearbox
 ```
 
-Edit `config.json` with your networks:
+## Commands
 
-```json
-{
-  "hotspot_ssid": "yournetwork",
-  "hotspot_password": "yourpassword",
-  "saved_networks": {
-    "home": "password",
-    "phone hotspot": "password"
-  }
-}
-```
-
-Reboot. Plug something in.
-
----
-
-## What happens when you plug stuff in
-
-| device | what it does |
-|---|---|
-| USB camera | motion detection, MJPEG stream to your browser |
-| USB keyboard | full shell terminal on the LCD |
-| TP-Link TL-WN722N | wifi recon + pentest dashboard (web portal, port 8080) |
-| TL-WN722N + ethernet | wifi-to-ethernet hotspot, routes clients out through eth0 |
-| rubber ducky | runs HID payloads |
-| USB drive | boots into Doom |
-| nothing | clock, update checker, robot eyes |
-
-Detection is by USB VID:PID, except keyboards (detected via `/proc/bus/input/devices`) and USB drives (detected via `lsblk`).
-
-## Pentest mode
-
-Triggered by a TL-WN722N adapter. Drives [bettercap](https://www.bettercap.org/) through its REST API for wifi recon, deauth, and handshake capture. Everything is controlled from a web dashboard served on the device itself — the LCD just shows connection status.
-
-Dashboard covers:
-- live AP/client recon
-- deauth (channel-locked, not blind)
-- handshake capture to `.pcap`
-- traffic view (SSE)
-- loot manager for captured files
-
-**For authorized testing and CTFs only.** Don't point this at networks you don't own or don't have explicit permission to test. Unauthorized wifi attacks are illegal in most places.
-
-## When there's no internet
-
-Spins up its own network, `BearBox-AP`. Connect to it, go to `bearbox.local` in a browser, pick a saved network or type in a new one. Comes back online on its own once connected.
-
-## Idle screens
-
-Tap to cycle:
-- clock, with CPU/RAM/disk/temp
-- update checker, pulls latest commit on tap
-- robot eyes, does nothing useful
-
-## SSH commands
-
-```bash
-bbupdate     # pull latest from github, restart, show animation on screen
-bbwifi       # connect to wifi
-bbsave       # save a network
-bbnetwork    # current ssid, ip, internet yes/no
-bboffline    # force offline mode for testing
-bbpentest    # pentest mode status: bettercap, portal, loot size
-bblogs       # live logs
-bbhelp       # everything else
-```
+`bbhelp` lists them. Service control (`bbstart`/`bbstop`/`bbrestart`/`bbstatus`/
+`bblogs`), `bbnexus` to update, `bbnetwork`/`bbip` for Wi-Fi status, `bbscreen
+bear|nexus` to run a screen by hand.
 
 ## Stack
 
-Python, Pillow, OpenCV, Flask, bettercap, nmcli, hostapd, dnsmasq, systemd, lgpio.
-
----
-
-*Built solo, with AI assistance on boilerplate. Bugs are mine.*
+Python, Pillow, numpy, websocket-client, systemd.

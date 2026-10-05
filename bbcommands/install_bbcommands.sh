@@ -9,12 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 COMMANDS=(
     bbstart bbstop bbrestart bbstatus bblogs bbshutdown
-    bbedit bbupdate bbconfig bbinstall bbscreen
-    bbwifi bbdisconnect bbsave bbip bbnetwork bboffline bbonline
-    bbrotate
-    bbpentest bbpencrash
+    bbedit bbnexus bbinstall bbscreen
+    bbip bbnetwork
     bbgitfix
-    bbdoom
     bbreset
     bbhelp
 )

@@ -150,10 +150,9 @@ ok "All dependencies installed"
 step "Installing Python packages..."
 divider
 PIP_PACKAGES=(
-    "qrcode[pil]"
     pillow
-    requests
-    sseclient-py
+    numpy
+    websocket-client
     lgpio
 )
 for pkg in "${PIP_PACKAGES[@]}"; do

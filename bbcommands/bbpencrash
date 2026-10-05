@@ -1,3 +1,0 @@
-#!/bin/bash
-echo "=== Last pentest crash ==="
-cat /tmp/pentest_crash.log 2>/dev/null || echo "No crash log found."

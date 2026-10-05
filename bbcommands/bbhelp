@@ -1,8 +1,10 @@
 #!/bin/bash
 cat << 'EOF'
 ╔══════════════════════════════════════════════════════════╗
-║                   BearBox Commands                       ║
+║                BearBox — NEXUS build                     ║
 ╠══════════════════════════════════════════════════════════╣
+║  Shows the NEXUS booth's live ticket sales. Nothing else.║
+║                                                          ║
 ║  SERVICE                                                 ║
 ║    bbstart       Start the service                       ║
 ║    bbstop        Stop the service (keeps autostart)      ║
@@ -11,36 +13,16 @@ cat << 'EOF'
 ║    bblogs        Tail all logs (journal+crash+boot)      ║
 ║    bbshutdown    Play shutdown screen then stop          ║
 ║                                                          ║
-║  DEV                                                     ║
-║    bbedit        cd into ~/bearbox                       ║
-║    bbupdate      git pull + auto restart                 ║
-║    bbconfig      Edit config.json                        ║
+║  UPDATE                                                  ║
+║    bbnexus       Pull the nexus branch + restart         ║
 ║    bbinstall     Re-run install.sh                       ║
-║    bbscreen      Run a screen standalone                 ║
-║                  [clock|hello|bear|offline|boot]         ║
 ║                                                          ║
-║  WIFI                                                    ║
-║    bbwifi        Connect to a network                    ║
-║    bbdisconnect  Disconnect (optional: iface name)       ║
-║    bbsave        Save a network to config.json           ║
+║  DEV / NETWORK                                           ║
+║    bbedit        cd into ~/bearbox                       ║
+║    bbscreen      Run a screen standalone [bear]          ║
 ║    bbip          Show all IPs                            ║
 ║    bbnetwork     Show SSID, IP and internet status       ║
-║    bboffline     Force offline mode for testing          ║
-║    bbonline      Re-enable auto-connect                  ║
-║                                                          ║
-║  DISPLAY                                                 ║
-║    bbrotate      Toggle 180° screen flip                 ║
-║                  (run bbrestart to apply)                ║
-║                                                          ║
-║  PENTEST                                                 ║
-║    bbpentest     Show pentest module status              ║
-║    bbpencrash    Show last pentest crash log             ║
-║                                                          ║
-║  GIT                                                     ║
 ║    bbgitfix      Auto-repair corrupted git objects       ║
-║                                                          ║
-║  GAMES                                                   ║
-║    bbdoom        Launch Doom directly (alias)            ║
 ║                                                          ║
 ║  DANGER ZONE                                             ║
 ║    bbreset       Completely wipe BearBox from this Pi    ║

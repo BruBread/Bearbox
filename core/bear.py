@@ -11,7 +11,7 @@ import sys
 import time
 import random
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from display import new_frame, push, C, W, H
 
 # ╔══════════════════════════════════════════════╗

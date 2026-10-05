@@ -4,7 +4,4 @@ PYPATH="$BB/core:$BB"
 
 echo "Stopping BearBox service..."
 sudo systemctl stop bearbox
-sleep 0.5
-echo "Playing shutdown animation..."
-sudo env PYTHONPATH=$PYPATH python3 $BB/core/screen_shutdown.py
 echo "BearBox offline."

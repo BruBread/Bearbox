@@ -1,0 +1,15 @@
+#!/bin/bash
+# bbnexus — update and (re)launch NEXUS mode.
+# Workflow: push changes to github (the nexus branch), then run bbnexus on the Pi.
+# It forces the Pi's working tree to match origin/nexus (discarding any local
+# drift), reinstalls the bbcommands, and restarts the service.
+BB=/home/bearbox/bearbox
+cd "$BB" || exit 1
+echo "Fetching NEXUS from github..."
+git fetch origin
+git checkout -f -B nexus origin/nexus
+echo "Installing commands..."
+sudo bash "$BB/bbcommands/install_bbcommands.sh"
+echo "Restarting into NEXUS mode..."
+sudo systemctl restart bearbox
+echo "Done. NEXUS mode active."
