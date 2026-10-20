@@ -68,9 +68,6 @@ echo ""
 divider
 echo -e "  ${BYLW}Profiles:${NC}"
 echo -e "  ${CYN}⚡${NC} TL-WN722N    →  ${BGRN}Pentest Mode${NC}"
-echo -e "  ${CYN}🎮${NC} USB Drive    →  ${BGRN}Game Launcher (Doom)${NC}"
-echo -e "  ${CYN}🦆${NC} Rubber Ducky →  ${BGRN}Ducky Scripts${NC}"
-echo -e "  ${CYN}📷${NC} USB Camera   →  ${BGRN}Surveillance + AI${NC}"
 echo -e "  ${CYN}⌨${NC}  USB Keyboard →  ${BGRN}LCD Terminal${NC}"
 divider
 echo ""
@@ -125,15 +122,6 @@ PACKAGES=(
     nikto
     gobuster
     hcxdumptool
-    # Doom dependencies
-    build-essential
-    libsdl2-dev
-    libsdl2-mixer-dev
-    libsdl2-image-dev
-    libsdl2-net-dev
-    # Camera dependencies
-    python3-opencv
-    libopencv-dev
     # GPIO (for icpep.py LEDs)
     python3-lgpio
     lgpio
@@ -270,59 +258,6 @@ cp /home/bearbox/bearbox/fonts/*.ttf /home/bearbox/.fonts/ 2>/dev/null || true
 fc-cache -fv /home/bearbox/.fonts > /dev/null 2>&1 &
 spinner $! "Loading fonts..."
 ok "Fonts ready"
-
-
-# ── DOOM ─────────────────────────────────────────────────────
-step "Installing Doom (doomgeneric)..."
-divider
-
-if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
-    ok "doomgeneric already compiled"
-else
-    info "Cloning doomgeneric..."
-    rm -rf /home/bearbox/doomgeneric
-    (git clone -q https://github.com/ozkl/doomgeneric.git /home/bearbox/doomgeneric) &
-    spinner $! "Cloning doomgeneric..."
-
-    info "Compiling doomgeneric (framebuffer target)..."
-    (cd /home/bearbox/doomgeneric/doomgeneric && make -j4 2>/dev/null) &
-    spinner $! "Compiling doomgeneric..."
-
-    if [ -f "/home/bearbox/doomgeneric/doomgeneric/doomgeneric" ]; then
-        ok "doomgeneric compiled"
-    else
-        echo -e "  ${BRED}✗${NC}  ${RED}doomgeneric build failed — Doom will not work${NC}"
-        info "Try manually: cd ~/doomgeneric/doomgeneric && make"
-    fi
-fi
-
-FREEDOOM_VERSION="0.13.0"
-FREEDOOM_DIR="/home/bearbox/freedoom-${FREEDOOM_VERSION}"
-FREEDOOM_WAD="${FREEDOOM_DIR}/freedoom1.wad"
-
-if [ -f "$FREEDOOM_WAD" ]; then
-    ok "freedoom1.wad already present"
-else
-    info "Downloading Freedoom ${FREEDOOM_VERSION} WAD..."
-    FREEDOOM_URL="https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
-    mkdir -p "$FREEDOOM_DIR"
-    (cd /tmp && \
-        wget -q "$FREEDOOM_URL" -O freedoom.zip && \
-        unzip -q freedoom.zip && \
-        cp freedoom-${FREEDOOM_VERSION}/freedoom1.wad "$FREEDOOM_DIR/" && \
-        rm -rf freedoom.zip freedoom-${FREEDOOM_VERSION}) &
-    spinner $! "Downloading freedoom1.wad..."
-
-    if [ -f "$FREEDOOM_WAD" ]; then
-        ok "freedoom1.wad installed at $FREEDOOM_WAD"
-    else
-        echo -e "  ${BRED}✗${NC}  ${RED}Freedoom download failed — check internet and retry${NC}"
-        info "Manual: wget https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
-    fi
-fi
-
-chown -R bearbox:bearbox /home/bearbox/doomgeneric 2>/dev/null || true
-chown -R bearbox:bearbox "$FREEDOOM_DIR"           2>/dev/null || true
 
 
 # ── SSH ───────────────────────────────────────────────────────
@@ -476,9 +411,6 @@ echo -e "  ${BGRN}BearBox is installed and ready!${NC}"
 echo ""
 echo -e "  ${CYN}Plug in your devices to get started:${NC}"
 echo -e "  ${DIM}⚡ TL-WN722N   →  Pentest mode loads automatically${NC}"
-echo -e "  ${DIM}🎮 USB Drive   →  Doom launches automatically${NC}"
-echo -e "  ${DIM}🦆 Rubber Ducky → Ducky scripts load automatically${NC}"
-echo -e "  ${DIM}📷 USB Camera  →  Surveillance mode loads automatically${NC}"
 echo -e "  ${DIM}⌨  USB Keyboard → LCD terminal loads automatically${NC}"
 echo ""
 echo -e "  ${CYN}SSH from your PC (no password):${NC}"
@@ -486,9 +418,6 @@ echo -e "  ${DIM}ssh bearbox@bearbox.local${NC}"
 echo ""
 echo -e "  ${CYN}When offline, connect to BearBox-AP and visit:${NC}"
 echo -e "  ${DIM}http://bearbox.local${NC}"
-echo ""
-echo -e "  ${CYN}Launch Doom manually:${NC}"
-echo -e "  ${DIM}bbdoom${NC}"
 echo ""
 echo -e "  ${CYN}Update BearBox anytime:${NC}"
 echo -e "  ${DIM}bbupdate${NC}"

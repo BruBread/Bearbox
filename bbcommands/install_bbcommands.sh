@@ -14,7 +14,6 @@ COMMANDS=(
     bbrotate
     bbpentest bbpencrash
     bbgitfix
-    bbdoom
     bbreset
     bbhelp
 )

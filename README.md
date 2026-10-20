@@ -33,15 +33,12 @@ Reboot. Plug something in.
 
 | device | what it does |
 |---|---|
-| USB camera | motion detection, MJPEG stream to your browser |
 | USB keyboard | full shell terminal on the LCD |
 | TP-Link TL-WN722N | wifi recon + pentest dashboard (web portal, port 8080) |
 | TL-WN722N + ethernet | wifi-to-ethernet hotspot, routes clients out through eth0 |
-| rubber ducky | runs HID payloads |
-| USB drive | boots into Doom |
 | nothing | clock, update checker, robot eyes |
 
-Detection is by USB VID:PID, except keyboards (detected via `/proc/bus/input/devices`) and USB drives (detected via `lsblk`).
+Detection is by USB VID:PID, except keyboards (detected via `/proc/bus/input/devices`).
 
 ## Pentest mode
 

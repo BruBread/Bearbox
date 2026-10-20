@@ -5,8 +5,6 @@ Watches for USB devices and launches the correct profile.
 
 Device → Profile:
   TL-WN722N (any)         → pentest  (RECON or SIPHON decided internally)
-  USB Drive               → games
-  Rubber Ducky            → rubberducky
   SiGma Micro TRACER kb   → icpep_keyboard  (1c4f:0002 — checked before generic keyboard)
   USB Keyboard            → keyboard
   Nothing                 → idle
@@ -29,8 +27,6 @@ PYTHONPATH = f"{BASE}/core:{BASE}:/home/bearbox/.local/lib/python3.13/site-packa
 
 PROFILES = {
     "2357:010c": "pentest",
-    "03eb:2042": "rubberducky",
-    "4c4a:4a55": "camera",
     "1c4f:0002": "icpep_keyboard",
 }
 
@@ -47,9 +43,6 @@ def get_connected_devices():
             vid_pid = parts[1].split()[0]
             devices.append(vid_pid)
     return devices
-
-def detect_usb_drive():
-    return bool(run("lsblk -o TRAN,MOUNTPOINT | grep usb").strip())
 
 def eth_connected():
     return run("cat /sys/class/net/eth0/carrier 2>/dev/null").strip() == "1"
@@ -96,9 +89,6 @@ def get_active_profile():
             # offline mode. RECON vs SIPHON is decided inside pentest/ui.py.
             return profile
 
-    if detect_usb_drive():
-        return "games"
-
     if detect_keyboard():
         return "keyboard"
 
@@ -116,11 +106,8 @@ def launch_profile(profile: str):
     profile_map = {
         "pentest":        f"{BASE}/profiles/pentest/launch.sh",
         "ap":             f"{BASE}/profiles/wifi/ap/ap_main.py",
-        "games":          f"{BASE}/profiles/games/launcher.py",
         "bluetooth":      f"{BASE}/profiles/bluetooth/ui.py",
-        "rubberducky":    f"{BASE}/profiles/rubberducky/ui.py",
         "keyboard":       f"{BASE}/profiles/keyboard/kb_ui.py",
-        "camera":         f"{BASE}/profiles/camera/camera_main.py",
         "icpep_keyboard": f"{BASE}/profiles/icpep_keyboard/icpep_main.py",
     }
     script = profile_map.get(profile)
@@ -139,7 +126,7 @@ def launch_profile(profile: str):
 
 # Profiles that warrant a "MODULE DISCONNECTED" screen when unplugged.
 # idle and keyboard are excluded — no disconnect screen for those.
-_DISCONNECT_PROFILES = {"pentest", "ap", "games", "bluetooth", "rubberducky", "camera"}
+_DISCONNECT_PROFILES = {"pentest", "ap", "bluetooth"}
 
 def stop_process(process, name):
     if process is None:
